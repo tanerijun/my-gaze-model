@@ -1,0 +1,17 @@
+dataset_name: gaze360
+data_root: /home/tanerijun/gaze-tracker-model/data/preprocessed/Gaze360 # <-- IMPORTANT: Change this path
+
+# Model Backbone
+backbone: mobileone_s4
+pretrained: true
+
+# Training params
+batch_size: 16
+lr: 0.00001
+epochs: 80
+alpha: 1.0
+
+# Gaze-specific params
+num_bins: 90
+angle_range: 180
+bin_width: 2

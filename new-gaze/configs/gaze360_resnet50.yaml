@@ -1,0 +1,20 @@
+# Config for Gaze360 training/evaluation
+dataset_name: gaze360
+data_root: /home/tanerijun/gaze-tracker-model/data/preprocessed/Gaze360 # <-- IMPORTANT: Change this path
+split: train # can be 'train', 'val', or 'test'
+
+# Model Backbone
+backbone: resnet50
+pretrained: true
+use_se: false
+
+# Training params
+batch_size: 32
+lr: 0.00001
+epochs: 80
+alpha: 1.0 # weight for regression loss
+
+# Gaze-specific params
+num_bins: 90
+angle_range: 180 # corresponds to [-90, 90] degrees
+bin_width: 2 # degrees per bin (180 / 90)

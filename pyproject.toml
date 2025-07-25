@@ -1,0 +1,22 @@
+[project]
+name = "gaze-tracker-model"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = "==3.12.9"
+dependencies = [
+    "matplotlib>=3.10.3",
+    "mediapipe>=0.10.14",
+    "numpy>=2.2.6",
+    "opencv-python>=4.12.0.88",
+    "pandas>=2.3.1",
+    "pyyaml>=6.0.2",
+    "scipy>=1.16.0",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+    "tqdm>=4.67.1",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
