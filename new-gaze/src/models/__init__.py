@@ -1,11 +1,12 @@
 from .backbone_resnet import ResNetBackbone
-from .backbone_mobileone import mobileone_s0, mobileone_s1, mobileone_s2, mobileone_s3, mobileone_s4
+from .backbone_mobileone import MobileOneBackbone
 from .gaze_head import GazeHead
 from .gaze_model import GazeModel
 
-def build_model(config):
+def build_model(config, **backbone_kwargs):
     """
     Builds the complete gaze model from backbone and head based on the config.
+    Any additional keyword arguments are passed directly to the backbone constructor.
     """
     backbone_name = config['backbone']
 
@@ -13,18 +14,14 @@ def build_model(config):
         backbone = ResNetBackbone(
             arch=backbone_name,
             pretrained=config.get('pretrained', True),
-            use_se=config.get('use_se', False)
+            **backbone_kwargs
         )
-    elif backbone_name == 'mobileone_s0':
-        backbone = mobileone_s0(pretrained=config.get('pretrained', True))
-    elif backbone_name == 'mobileone_s1':
-        backbone = mobileone_s1(pretrained=config.get('pretrained', True))
-    elif backbone_name == 'mobileone_s2':
-        backbone = mobileone_s2(pretrained=config.get('pretrained', True))
-    elif backbone_name == 'mobileone_s3':
-        backbone = mobileone_s3(pretrained=config.get('pretrained', True))
-    elif backbone_name == 'mobileone_s4':
-        backbone = mobileone_s4(pretrained=config.get('pretrained', True))
+    elif backbone_name.startswith('mobileone'):
+        backbone = MobileOneBackbone(
+            arch=backbone_name,
+            pretrained=config.get('pretrained', True),
+            **backbone_kwargs
+        )
     else:
         raise ValueError(f"Unknown backbone: {backbone_name}")
 

@@ -29,11 +29,18 @@ def main(cfg_path, weights_path, output_path):
     Args:
         cfg_path (str): Path to the training YAML config file.
         weights_path (str): Path to the trained (unfused) model weights.
-        output_path (str): Path to save the new fused model weights.
+        output_path (str, optional): Path to save the new fused model weights.
+                                     If None, saves next to the original weights.
     """
     logger = get_logger()
 
-    # --- 1. Load Configuration ---
+    if output_path is None:
+        base, ext = os.path.splitext(weights_path)
+        output_path = f"{base}_fused{ext}"
+        logger.info(f"Output path not specified. Saving fused model to: {output_path}")
+    else:
+        logger.info(f"Custom output path specified: {output_path}")
+
     with open(cfg_path, 'r') as f:
         cfg = yaml.safe_load(f)
 
@@ -43,21 +50,20 @@ def main(cfg_path, weights_path, output_path):
 
     logger.info(f"Loading model with config: {cfg_path}")
 
-    # --- 2. Build and Load Unfused Model ---
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = build_model(cfg).to(device)
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.eval()
     logger.info(f"Successfully loaded unfused weights from: {weights_path}")
 
-    # --- 3. Reparameterize the Model ---
     logger.info("Fusing model branches for inference...")
     reparameterized_model = reparameterize_model(model)
     logger.info("Model reparameterization complete.")
 
-    # --- 4. Save Fused Model ---
-    # Ensure output directory exists
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
     torch.save(reparameterized_model.state_dict(), output_path)
     logger.info(f"Fused inference-ready model saved to: {output_path}")
 
@@ -65,6 +71,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MobileOne Model Reparameterization")
     parser.add_argument('--config', type=str, required=True, help="Path to the MobileOne training config file.")
     parser.add_argument('--weights', type=str, required=True, help="Path to the trained (unfused) model weights.")
-    parser.add_argument('--output', type=str, required=True, help="Path to save the fused model weights.")
+    parser.add_argument('--output', type=str, default=None, help="Path to save fused weights. (Optional: Defaults to the same directory as input weights)")
     args = parser.parse_args()
     main(args.config, args.weights, args.output)

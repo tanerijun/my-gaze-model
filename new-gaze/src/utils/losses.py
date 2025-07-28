@@ -9,9 +9,7 @@ class GazeLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.num_bins = config['num_bins']
-        self.angle_range = config['angle_range']
-        self.bin_width = config['bin_width']
-        self.alpha = config.get('alpha', 1.0) # Weight for the regression loss
+        self.alpha = config.get('alpha', 1.0) # weight for the regression loss
 
         # Loss functions
         self.cls_loss = nn.CrossEntropyLoss()
@@ -46,10 +44,9 @@ class GazeLoss(nn.Module):
         pitch_probs = F.softmax(pitch_pred, dim=1)
         yaw_probs = F.softmax(yaw_pred, dim=1)
 
-        # Convert binned probabilities to continuous angle prediction
-        # This is the expectation of the bin distribution
-        pitch_cont_pred = torch.sum(pitch_probs * self.idx_tensor, 1) * self.bin_width - (self.angle_range / 2)
-        yaw_cont_pred = torch.sum(yaw_probs * self.idx_tensor, 1) * self.bin_width - (self.angle_range / 2)
+        # L2CS-Net uses a bin width of 4 and a range of [-180, 180] for its 90 bins
+        pitch_cont_pred = torch.sum(pitch_probs * self.idx_tensor, 1) * 4 - 180
+        yaw_cont_pred = torch.sum(yaw_probs * self.idx_tensor, 1) * 4 - 180
 
         # Calculate regression loss
         loss_pitch_reg = self.reg_loss(pitch_cont_pred, pitch_cont_gt)

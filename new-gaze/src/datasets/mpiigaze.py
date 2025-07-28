@@ -1,4 +1,3 @@
-# src/datasets/mpiigaze.py
 import os
 import numpy as np
 from PIL import Image
@@ -18,7 +17,7 @@ class MPIIGazeDataset(Dataset):
 
         # Updated transform to match Gaze360 for consistency
         self.transform = transforms.Compose([
-            transforms.Resize((448, 448)),
+            transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])

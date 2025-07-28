@@ -36,24 +36,26 @@ class GazePipeline:
         # This must be IDENTICAL to the transform used during training
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((448, 448)), # Use 448 for higher accuracy models
+            transforms.Resize((448, 448)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
 
     def _decode_predictions(self, predictions):
-        """Converts binned model output to continuous angular predictions."""
+        """
+        Converts binned model output to continuous angular predictions.
+        This logic MUST match the regression loss calculation in GazeLoss.
+        """
         pitch_pred, yaw_pred = predictions
         num_bins = self.config['num_bins']
-        angle_range = self.config['angle_range']
-        bin_width = self.config['bin_width']
         idx_tensor = torch.arange(num_bins, dtype=torch.float32).to(self.device)
 
         pitch_probs = F.softmax(pitch_pred, dim=1)
         yaw_probs = F.softmax(yaw_pred, dim=1)
 
-        pitch = torch.sum(pitch_probs * idx_tensor, 1) * bin_width - (angle_range / 2)
-        yaw = torch.sum(yaw_probs * idx_tensor, 1) * bin_width - (angle_range / 2)
+        # Calculate expected value (continuous angle) using the L2CS-Net logic
+        pitch = torch.sum(pitch_probs * idx_tensor, 1) * 4 - 180
+        yaw = torch.sum(yaw_probs * idx_tensor, 1) * 4 - 180
 
         return torch.stack([pitch, yaw], dim=1)
 
