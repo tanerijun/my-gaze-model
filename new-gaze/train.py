@@ -11,6 +11,12 @@ from src.utils.logger import get_logger
 import time
 from src.models.backbone_resnet import ResNetBackbone
 import matplotlib.pyplot as plt
+from typing import Protocol, runtime_checkable
+
+@runtime_checkable
+class HasFreezeBNStats(Protocol):
+    def freeze_bn_stats(self) -> None:
+        ...
 
 def plot_loss_curve(train_losses, val_losses, output_dir):
     """
@@ -35,16 +41,6 @@ def plot_loss_curve(train_losses, val_losses, output_dir):
     plt.savefig(plot_path)
     plt.close() # Close the figure to free up memory
     return plot_path
-
-def freeze_batchnorm_stats(model):
-    """
-    Freezes the running mean and variance of all BatchNorm layers in the model.
-    This is equivalent to calling .eval() on all BatchNorm layers.
-    """
-    for module in model.modules():
-        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
-            module.eval()
-
 
 def main(cfg_path):
     """
@@ -103,8 +99,8 @@ def main(cfg_path):
     for epoch in range(cfg.get('epochs')):
         model.train()
 
-        if cfg['backbone'].startswith('resnet'):
-            freeze_batchnorm_stats(model.backbone)
+        if isinstance(model.backbone, ResNetBackbone) and isinstance(model.backbone, HasFreezeBNStats):
+            model.backbone.freeze_bn_stats()
 
         total_train_loss = 0
         for i, (imgs, binned_labels, cont_labels) in enumerate(train_loader):

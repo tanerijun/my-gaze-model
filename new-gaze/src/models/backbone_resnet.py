@@ -44,3 +44,11 @@ class ResNetBackbone(nn.Module):
         x = self.net.layer4(x)
 
         return x
+
+    def freeze_bn_stats(self):
+        """
+        Freezes the running mean and variance of all BatchNorm layers in the backbone.
+        """
+        for module in self.net.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.eval()
