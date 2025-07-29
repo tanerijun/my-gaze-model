@@ -1,0 +1,2 @@
+include: "./mpiifacegaze_train.yaml"
+split: "__PERSON_ID__"

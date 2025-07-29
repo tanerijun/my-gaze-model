@@ -1,4 +1,3 @@
-import yaml
 import argparse
 import torch
 import torch.nn.functional as F
@@ -7,6 +6,7 @@ from src.models import build_model
 from src.datasets import get_dataset
 from src.utils.metrics import angular_error_3d
 from src.utils.logger import get_logger
+from src.utils.config_loader import load_config
 from tqdm import tqdm
 
 def decode_predictions(predictions, config):
@@ -35,8 +35,7 @@ def main(cfg_path, weights_path, fused):
         weights_path (str): Path to the trained model weights (.pth file).
         fused (bool): If True, builds the model in inference mode for fused weights.
     """
-    with open(cfg_path, 'r') as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config(cfg_path)
 
     logger = get_logger()
     logger.info(f"Evaluating with config: {cfg_path}")
@@ -55,7 +54,6 @@ def main(cfg_path, weights_path, fused):
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.eval()
 
-    cfg['split'] = 'test'
     test_dataset = get_dataset(cfg)
     test_loader = DataLoader(
         test_dataset,
