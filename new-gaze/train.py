@@ -138,6 +138,8 @@ def main(cfg_path):
         logger.info(f"Average Validation Loss: {avg_val_loss:.4f}")
         logger.info("-------------------------")
 
+        torch.save(model.state_dict(), os.path.join(output_dir, 'latest.pth'))
+
         if avg_val_loss < best_val_loss:
             best_val_loss = avg_val_loss
             torch.save(model.state_dict(), os.path.join(output_dir, 'best.pth'))

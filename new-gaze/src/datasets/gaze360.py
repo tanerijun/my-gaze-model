@@ -2,6 +2,7 @@ import os
 import numpy as np
 from PIL import Image
 import torch
+from tqdm import tqdm
 from torch.utils.data import Dataset
 from torchvision import transforms
 
@@ -25,8 +26,22 @@ class Gaze360Dataset(Dataset):
 
         self.lines = []
         with open(label_file) as f:
-            self.lines = f.readlines()[1:] # skip header
-            print(f"Loading {len(self.lines)} samples for {split} from {label_file}...")
+            lines_raw = f.readlines()[1:] # skip header
+
+        if self.split in ['val', 'test']:
+            print(f"Filtering {self.split} set for angles <= 90 degrees...")
+            for line in tqdm(lines_raw):
+                parts = line.strip().split()
+                gaze_2d = np.array(parts[5].split(",")).astype(float) # pitch, yaw in radians
+                pitch_deg = gaze_2d[0] * 180 / np.pi
+                yaw_deg = gaze_2d[1] * 180 / np.pi
+                if abs(pitch_deg) <= 90 and abs(yaw_deg) <= 90:
+                    self.lines.append(line)
+        else:
+            # For the training set, use all samples as before.
+            self.lines = lines_raw
+
+        print(f"Loaded {len(self.lines)}/{len(lines_raw)} samples for {self.split} split.")
 
     def __len__(self):
         return len(self.lines)
