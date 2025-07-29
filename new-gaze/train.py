@@ -3,6 +3,7 @@ import argparse
 import os
 import torch
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from src.models import build_model
 from src.datasets import get_dataset
 from src.utils.losses import GazeLoss
@@ -85,6 +86,8 @@ def main(cfg_path):
         logger.info("Using standard training strategy (all layers trainable).")
         optimizer = torch.optim.Adam(model.parameters(), lr=cfg.get('lr', 1e-4))
 
+    scheduler = CosineAnnealingLR(optimizer, T_max=cfg['epochs'], eta_min=1e-7)
+
     # --- Load Datasets ---
     train_dataset = get_dataset({**cfg, 'split': 'train'})
     train_loader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
@@ -137,6 +140,9 @@ def main(cfg_path):
         val_loss_history.append(avg_val_loss)
         logger.info(f"Average Validation Loss: {avg_val_loss:.4f}")
         logger.info("-------------------------")
+
+        scheduler.step()
+        logger.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.8f}")
 
         torch.save(model.state_dict(), os.path.join(output_dir, 'latest.pth'))
 
