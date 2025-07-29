@@ -8,7 +8,8 @@ def get_dataset(config):
             split=config['split'],
             num_bins=config['num_bins'],
             angle_range=config['angle_range'],
-            bin_width=config['bin_width']
+            bin_width=config['bin_width'],
+            image_size=config.get('image_size', 224)
         )
     elif config['dataset_name'] == 'mpiigaze':
         return MPIIGazeDataset(

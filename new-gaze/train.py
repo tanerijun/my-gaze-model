@@ -35,6 +35,16 @@ def plot_loss_curve(train_losses, val_losses, output_dir):
     plt.close() # Close the figure to free up memory
     return plot_path
 
+def freeze_batchnorm_stats(model):
+    """
+    Freezes the running mean and variance of all BatchNorm layers in the model.
+    This is equivalent to calling .eval() on all BatchNorm layers.
+    """
+    for module in model.modules():
+        if isinstance(module, (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d)):
+            module.eval()
+
+
 def main(cfg_path):
     """
     Main training loop for gaze estimation.
@@ -76,12 +86,10 @@ def main(cfg_path):
         optimizer = torch.optim.Adam(model.parameters(), lr=cfg.get('lr', 1e-4))
 
     # --- Load Datasets ---
-    cfg['split'] = 'train'
-    train_dataset = get_dataset(cfg)
-    train_loader = DataLoader(train_dataset, batch_size=cfg.get('batch_size', 32), shuffle=True, num_workers=4, pin_memory=True)
-    cfg['split'] = 'val'
-    val_dataset = get_dataset(cfg)
-    val_loader = DataLoader(val_dataset, batch_size=cfg.get('batch_size', 32), shuffle=False, num_workers=4, pin_memory=True)
+    train_dataset = get_dataset({**cfg, 'split': 'train'})
+    train_loader = DataLoader(train_dataset, batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+    val_dataset = get_dataset({**cfg, 'split': 'val'})
+    val_loader = DataLoader(val_dataset, batch_size=cfg['batch_size'], shuffle=False, num_workers=4, pin_memory=True)
 
     # --- Lists to store loss history for plotting ---
     train_loss_history = []
@@ -89,17 +97,25 @@ def main(cfg_path):
 
     # --- Training and Validation Loop ---
     best_val_loss = float('inf')
-    for epoch in range(cfg.get('epochs', 1)):
+    for epoch in range(cfg.get('epochs')):
         model.train()
+
+        if cfg['backbone'].startswith('resnet'):
+            freeze_batchnorm_stats(model.backbone)
+
         total_train_loss = 0
         for i, (imgs, binned_labels, cont_labels) in enumerate(train_loader):
-            imgs, binned_labels, cont_labels = imgs.to(device), binned_labels.to(device), cont_labels.to(device)
+            imgs = imgs.to(device)
+            binned_labels = binned_labels.to(device)
+            cont_labels = cont_labels.to(device)
+
             optimizer.zero_grad()
             predictions = model(imgs)
             loss = criterion(predictions, binned_labels, cont_labels)
             loss.backward()
             optimizer.step()
             total_train_loss += loss.item()
+
             if (i + 1) % 100 == 0:
                 logger.info(f"Epoch [{epoch+1}/{cfg['epochs']}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
 

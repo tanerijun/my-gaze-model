@@ -1,18 +1,18 @@
 # Config for Gaze360 training/evaluation
 dataset_name: gaze360
-data_root: /home/tanerijun/gaze-tracker-model/data/preprocessed_448/Gaze360 # <-- IMPORTANT: Change this path
+data_root: /home/tanerijun/gaze-tracker-model/data/preprocessed/Gaze360 # <-- IMPORTANT: Change this path
 split: train # can be 'train', 'val', or 'test'
 
 backbone: resnet18
 pretrained: true
 
-batch_size: 32
+image_size: 224
+batch_size: 16
 lr: 0.00001
-epochs: 60
+epochs: 50
 alpha: 1.0
 
 # Using L2CS-Net's implied binning logic
 num_bins: 90
-# The following two are not used by the new loss function but are kept for consistency
-angle_range: 360 # Implied range from the loss formula
-bin_width: 4 # Implied bin_width from the loss formula
+angle_range: 360 # Corresponds to [-180, 180]
+bin_width: 4 # 360 / 90 = 4

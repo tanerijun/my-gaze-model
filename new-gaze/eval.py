@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from src.models import build_model
 from src.datasets import get_dataset
-from src.utils.metrics import angular_error
+from src.utils.metrics import angular_error_3d
 from src.utils.logger import get_logger
 from tqdm import tqdm
 
@@ -13,14 +13,17 @@ def decode_predictions(predictions, config):
     """Converts binned model output to continuous angular predictions."""
     pitch_pred, yaw_pred = predictions
     device = pitch_pred.device
-    num_bins = config['num_bins']
-    idx_tensor = torch.arange(num_bins, dtype=torch.float32).to(device)
 
+    num_bins = config['num_bins']
+    angle_range = config['angle_range']
+    bin_width = config['bin_width']
+
+    idx_tensor = torch.arange(num_bins, dtype=torch.float32).to(device)
     pitch_probs = F.softmax(pitch_pred, dim=1)
     yaw_probs = F.softmax(yaw_pred, dim=1)
 
-    pitch_cont = torch.sum(pitch_probs * idx_tensor, 1) * 4 - 180
-    yaw_cont = torch.sum(yaw_probs * idx_tensor, 1) * 4 - 180
+    pitch_cont = torch.sum(pitch_probs * idx_tensor, 1) * bin_width - (angle_range / 2)
+    yaw_cont = torch.sum(yaw_probs * idx_tensor, 1) * bin_width - (angle_range / 2)
 
     return torch.stack([pitch_cont, yaw_cont], dim=1)
 
@@ -48,9 +51,7 @@ def main(cfg_path, weights_path, fused):
             logger.warning(f"The --fused flag is set but the backbone '{cfg['backbone']}' does not support it. Ignoring.")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # Pass the kwargs dictionary to the model builder
-    model = build_model(cfg, **backbone_kwargs).to(device) # <-- UPDATED
-
+    model = build_model(cfg, **backbone_kwargs).to(device)
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.eval()
 
@@ -71,7 +72,7 @@ def main(cfg_path, weights_path, fused):
             cont_labels = cont_labels.to(device)
             predictions = model(imgs)
             decoded_preds = decode_predictions(predictions, cfg)
-            total_error += angular_error(decoded_preds, cont_labels) * imgs.size(0)
+            total_error += angular_error_3d(decoded_preds, cont_labels) * imgs.size(0)
 
     mean_ang_error = total_error / len(test_dataset)
     logger.info("=================================================")

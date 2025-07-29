@@ -13,8 +13,10 @@ class GazePipeline:
         self.config = config
         self.device = device
 
-        # --- Load Gaze Model ---
-        self.model = build_model(config).to(device)
+        is_fused = 'fused' in config and config['fused']
+        model_kwargs = {'inference_mode': is_fused} if is_fused else {}
+        self.model = build_model(config, **model_kwargs).to(device)
+
         self.model.load_state_dict(torch.load(weights_path, map_location=device))
         self.model.eval()
         print("Gaze estimation model loaded successfully.")
@@ -33,10 +35,13 @@ class GazePipeline:
         print("Face detector model loaded successfully.")
 
         # --- Define Preprocessing ---
+        image_size = config.get('image_size', 224)
+        print(f"Initializing GazePipeline with image size: {image_size}x{image_size}")
+
         # This must be IDENTICAL to the transform used during training
         self.transform = transforms.Compose([
             transforms.ToPILImage(),
-            transforms.Resize((448, 448)),
+            transforms.Resize((image_size, image_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])

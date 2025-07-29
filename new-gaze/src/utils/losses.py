@@ -9,6 +9,8 @@ class GazeLoss(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.num_bins = config['num_bins']
+        self.angle_range = config['angle_range']
+        self.bin_width = config['bin_width']
         self.alpha = config.get('alpha', 1.0) # weight for the regression loss
 
         # Loss functions
@@ -44,16 +46,15 @@ class GazeLoss(nn.Module):
         pitch_probs = F.softmax(pitch_pred, dim=1)
         yaw_probs = F.softmax(yaw_pred, dim=1)
 
-        # L2CS-Net uses a bin width of 4 and a range of [-180, 180] for its 90 bins
-        pitch_cont_pred = torch.sum(pitch_probs * self.idx_tensor, 1) * 4 - 180
-        yaw_cont_pred = torch.sum(yaw_probs * self.idx_tensor, 1) * 4 - 180
+        # Calculate expected value of bins
+        pitch_cont_pred = torch.sum(pitch_probs * self.idx_tensor, 1) * self.bin_width - (self.angle_range / 2)
+        yaw_cont_pred = torch.sum(yaw_probs * self.idx_tensor, 1) * self.bin_width - (self.angle_range / 2)
 
         # Calculate regression loss
         loss_pitch_reg = self.reg_loss(pitch_cont_pred, pitch_cont_gt)
         loss_yaw_reg = self.reg_loss(yaw_cont_pred, yaw_cont_gt)
 
         # --- Combine Losses ---
-        total_loss = (loss_pitch_cls + loss_yaw_cls) + \
-                     self.alpha * (loss_pitch_reg + loss_yaw_reg)
+        total_loss = (loss_pitch_cls + loss_yaw_cls) + self.alpha * (loss_pitch_reg + loss_yaw_reg)
 
         return total_loss
