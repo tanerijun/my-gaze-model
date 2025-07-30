@@ -13,5 +13,8 @@ wheels/
 .env
 ref
 
+# Dev and Experiments
+# dataset, pretrained-models, trained-models
 data
 pretrained
+output

@@ -5,7 +5,8 @@ TODO: Add description, demo
 ## Installation
 
 1. Clone repository
-2. Install dependencies
+2. `cd` into project. Note that every script is expected to be run from this directory
+3. Install dependencies
   ```sh
   uv sync # or check `pyproject.toml` for requirements if not using uv
   ```
@@ -137,7 +138,7 @@ split: "__PERSON_ID__" # this will be replaced by the trainer script
 The output of the script is located at `output/mpii_loocv_results_<TIMESTAMP>`
 
 ```bash
-uv run scripts/run_mpii_loocv.sh
+uv run mpii_loocv/run.sh
 ```
 
 ## Additional Functionality
@@ -162,3 +163,21 @@ Use the `--fused` flag to tell the evaluation script to build the model in its i
 ```bash
 uv run python eval.py --config /path/to/mobileone_training_config.yaml --weights /path/to/best_fused.pth --fused
 ```
+
+## Misc
+
+### Available Backbones
+
+- resnet18
+- resnet34
+- resnet50
+- mobileone_s0
+- mobileone_s1
+- mobileone_s2
+- mobileone_s3
+- mobileone_s4
+- lowformer_b0
+- lowformer_b1
+- lowformer_b1.5
+- lowformer_b2
+- lowformer_b3
