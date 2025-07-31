@@ -14,11 +14,19 @@ class Gaze360Dataset(Dataset):
         self.angle_range = angle_range
         self.bin_width = bin_width
 
-        self.transform = transforms.Compose([
-            transforms.Resize((image_size, image_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        if split == "train":
+            self.transform = transforms.Compose([
+                transforms.Resize((image_size, image_size)),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.2, hue=0.1),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
+        else:
+            self.transform = transforms.Compose([
+                transforms.Resize((image_size, image_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            ])
 
         # The folder structure of Gaze360 is assumed to be /path/to/Gaze360/Image and /path/to/Gaze360/Label
         self.image_dir = os.path.join(self.data_root, 'Image')

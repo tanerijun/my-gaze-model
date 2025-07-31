@@ -15,7 +15,8 @@ class GazeLoss(nn.Module):
 
         # Loss functions
         self.cls_loss = nn.CrossEntropyLoss()
-        self.reg_loss = nn.MSELoss()
+        # self.reg_loss = nn.MSELoss()
+        self.reg_loss = nn.L1Loss()
 
         # Create a tensor of bin indices [0, 1, 2, ..., num_bins-1]
         self.idx_tensor = torch.arange(self.num_bins, dtype=torch.float32)

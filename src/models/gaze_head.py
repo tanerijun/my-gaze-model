@@ -9,11 +9,14 @@ class GazeHead(nn.Module):
     Args:
         in_channels (int): Number of input channels from the backbone.
         num_bins (int): Number of bins for the classification output.
+        dropout_rate (float)
     """
-    def __init__(self, in_channels, num_bins):
+    def __init__(self, in_channels, num_bins, dropout_rate=0.3):
         super().__init__()
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.flatten = nn.Flatten()
+
+        self.dropout = nn.Dropout(dropout_rate)
 
         # Separate linear layers for pitch and yaw classification
         self.fc_pitch = nn.Linear(in_channels, num_bins)
@@ -22,6 +25,7 @@ class GazeHead(nn.Module):
     def forward(self, x):
         x = self.pool(x)     # [B, C, 1, 1]
         x = self.flatten(x)  # [B, C]
+        x = self.dropout(x)
 
         # Get binned predictions
         pitch_logits = self.fc_pitch(x)  # [B, num_bins]

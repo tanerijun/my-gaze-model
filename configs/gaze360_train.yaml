@@ -11,7 +11,7 @@ pretrained: true
 image_size: 224
 batch_size: 16
 lr: 0.00001
-epochs: 1
+epochs: 100
 alpha: 1.0
 
 # Gaze 360 binning logic

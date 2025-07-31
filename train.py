@@ -110,15 +110,17 @@ def main(cfg_path):
     # Model, Criterion, Optimizer, Scheduler
     model = build_model(cfg).to(device)
     criterion = GazeLoss(cfg).to(device)
+
     if isinstance(model.backbone, ResNetBackbone):
         logger.info("Using ResNet fine-tuning strategy (freezing conv1 and bn1 layers).")
         for param in model.backbone.net.conv1.parameters(): param.requires_grad = False
         for param in model.backbone.net.bn1.parameters(): param.requires_grad = False
         fine_tune_params = [p for p in model.parameters() if p.requires_grad]
-        optimizer = torch.optim.Adam(fine_tune_params, lr=cfg.get('lr', 1e-4))
+        optimizer = torch.optim.AdamW(fine_tune_params, lr=cfg.get('lr', 1e-4), weight_decay=1e-4)
     else:
         logger.info("Using standard training strategy (all layers trainable).")
-        optimizer = torch.optim.Adam(model.parameters(), lr=cfg.get('lr', 1e-4))
+        optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.get('lr', 1e-4), weight_decay=1e-4)
+
     scheduler = CosineAnnealingLR(optimizer, T_max=cfg['epochs'], eta_min=1e-7)
 
     # DataLoaders
@@ -145,6 +147,9 @@ def main(cfg_path):
                 best_val_loss = avg_val_loss
                 torch.save(model.state_dict(), os.path.join(output_dir, 'best.pth'))
                 logger.info(f"New best model saved with validation loss: {best_val_loss:.4f}")
+
+        if (epoch + 1) % 10 == 0:
+            torch.save(model.state_dict(), os.path.join(output_dir, f'epoch_{epoch + 1}.pth'))
 
         torch.save(model.state_dict(), os.path.join(output_dir, 'latest.pth'))
         scheduler.step()
