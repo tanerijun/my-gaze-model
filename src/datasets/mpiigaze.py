@@ -6,12 +6,12 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class MPIIGazeDataset(Dataset):
-    def __init__(self, data_root, split, num_bins, angle_range, bin_width, image_size=224):
+    def __init__(self, data_root, split, num_bins, angle_range, image_size=224):
         self.data_root = data_root
         self.split = split  # For MPII, split can be 'train', 'val', or a person ID like 'p00'
         self.num_bins = num_bins
         self.angle_range = angle_range
-        self.bin_width = bin_width
+        self.bin_width = self.angle_range / self.num_bins
 
         if split == "train":
             self.transform = transforms.Compose([

@@ -10,7 +10,7 @@ class GazeLoss(nn.Module):
         super().__init__()
         self.num_bins = config['num_bins']
         self.angle_range = config['angle_range']
-        self.bin_width = config['bin_width']
+        self.bin_width = self.angle_range / self.num_bins
         self.alpha = config.get('alpha', 1.0) # weight for the regression loss
 
         # Loss functions

@@ -16,7 +16,7 @@ def decode_predictions(predictions, config):
 
     num_bins = config['num_bins']
     angle_range = config['angle_range']
-    bin_width = config['bin_width']
+    bin_width = angle_range / num_bins
 
     idx_tensor = torch.arange(num_bins, dtype=torch.float32).to(device)
     pitch_probs = F.softmax(pitch_pred, dim=1)

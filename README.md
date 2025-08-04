@@ -70,7 +70,6 @@ alpha: 1.0
 # Gaze 360 binning logic
 num_bins: 90
 angle_range: 360 # Corresponds to [-180, 180]
-bin_width: 4 # 360 / 90 = 4
 ```
 
 Create another evaluation config YAML file in the `configs/` directory (e.g., `configs/gaze360_eval.yaml`). This config file rewrite the `split` from train config.
@@ -124,7 +123,6 @@ do_validation: false
 # Range: -42 to +42 degrees
 num_bins: 28
 angle_range: 84 # 42 - (-42)
-bin_width: 3 # 84 / 28 = 3
 ```
 
 Create another evaluation config YAML file in the `configs/` directory (e.g., `configs/gaze360_eval.yaml`). This config file rewrite the `split` from train config.
@@ -178,6 +176,6 @@ uv run python eval.py --config /path/to/mobileone_training_config.yaml --weights
 - mobileone_s4
 - lowformer_b0
 - lowformer_b1
-- lowformer_b1.5
+- lowformer_b15
 - lowformer_b2
 - lowformer_b3

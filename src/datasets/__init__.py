@@ -11,7 +11,6 @@ def get_dataset(config):
             split=config['split'],
             num_bins=config['num_bins'],
             angle_range=config['angle_range'],
-            bin_width=config['bin_width'],
             image_size=image_size
         )
     elif dataset_name == 'mpiigaze':
@@ -21,7 +20,6 @@ def get_dataset(config):
             split=config['split'],
             num_bins=config['num_bins'],
             angle_range=config['angle_range'],
-            bin_width=config['bin_width'],
             image_size=image_size
         )
     else:

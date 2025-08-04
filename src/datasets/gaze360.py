@@ -7,12 +7,12 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class Gaze360Dataset(Dataset):
-    def __init__(self, data_root, split, num_bins, angle_range, bin_width, image_size):
+    def __init__(self, data_root, split, num_bins, angle_range, image_size):
         self.data_root = data_root
         self.split = split
         self.num_bins = num_bins
         self.angle_range = angle_range
-        self.bin_width = bin_width
+        self.bin_width = self.angle_range / self.num_bins
 
         if split == "train":
             self.transform = transforms.Compose([

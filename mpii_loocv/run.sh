@@ -29,7 +29,7 @@ for i in $(seq -f "%02g" 0 14); do
 
     # 1. Prepare Data
     echo "Step 1: Preparing training labels, holding out $PERSON_ID..."
-    uv run scripts/prepare_mpii_labels.py --data_root "$DATA_ROOT" --test_person "$PERSON_ID"
+    uv run mpii_loocv/prepare_mpii_labels.py --data_root "$DATA_ROOT" --test_person "$PERSON_ID"
 
     # 2. Train Model
     echo "Step 2: Training model..."
