@@ -8,6 +8,7 @@ from src.utils.metrics import angular_error_3d
 from src.utils.logger import get_logger
 from src.utils.config_loader import load_config
 from tqdm import tqdm
+import time
 
 def decode_predictions(predictions, config):
     """Converts binned model output to continuous angular predictions."""
@@ -26,6 +27,21 @@ def decode_predictions(predictions, config):
     yaw_cont = torch.sum(yaw_probs * idx_tensor, 1) * bin_width - (angle_range / 2)
 
     return torch.stack([pitch_cont, yaw_cont], dim=1)
+
+def count_parameters(model):
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+def count_avg_inference_time(model, device):
+    dummy_input = torch.randn(1, 3, 224, 224).to(device)
+
+    for _ in range(10):
+        _ = model(dummy_input)
+
+    start_time = time.time()
+    for _ in range(100):
+        _ = model(dummy_input)
+    avg_time = (time.time() - start_time) / 100
+    return avg_time
 
 def main(cfg_path, weights_path, fused):
     """
@@ -52,7 +68,14 @@ def main(cfg_path, weights_path, fused):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = build_model(cfg, **backbone_kwargs).to(device)
     model.load_state_dict(torch.load(weights_path, map_location=device))
+
+    total_params = count_parameters(model)
+    logger.info(f"Total trainable parameters: {total_params}")
+
     model.eval()
+
+    avg_inference_time = count_avg_inference_time(model, device)
+    logger.info(f"Average inference time: {avg_inference_time*1000:.2f}ms")
 
     test_dataset = get_dataset(cfg)
     test_loader = DataLoader(
