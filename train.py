@@ -2,8 +2,10 @@ import yaml
 import argparse
 import os
 import torch
+import random
+import numpy as np
 from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import OneCycleLR
 from torch.optim.optimizer import Optimizer
 import time
 import matplotlib.pyplot as plt
@@ -22,6 +24,15 @@ class HasFreezeBNStats(Protocol):
     def freeze_bn_stats(self) -> None:
         ...
 
+def set_random_seeds(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 # --- Helper Function for a Single Training Epoch ---
 def train_one_epoch(model: torch.nn.Module,
                     criterion: GazeLoss,
@@ -30,7 +41,8 @@ def train_one_epoch(model: torch.nn.Module,
                     device: torch.device,
                     epoch: int,
                     total_epochs: int,
-                    logger):
+                    logger,
+                    scheduler=None):
     """
     Performs one full training epoch.
     """
@@ -46,6 +58,8 @@ def train_one_epoch(model: torch.nn.Module,
         loss = criterion(predictions, binned_labels, cont_labels)
         loss.backward()
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
         total_train_loss += loss.item()
 
         if (i + 1) % 100 == 0:
@@ -121,18 +135,20 @@ def main(cfg_path):
         logger.info("Using standard training strategy (all layers trainable).")
         optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.get('lr', 1e-4), weight_decay=1e-4)
 
-    scheduler = CosineAnnealingLR(optimizer, T_max=cfg['epochs'], eta_min=1e-7)
-
     # DataLoaders
     train_loader = DataLoader(get_dataset({**cfg, 'split': 'train'}), batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(get_dataset({**cfg, 'split': 'val'}), batch_size=cfg['batch_size'], shuffle=False, num_workers=4, pin_memory=True) if do_validation else None
+
+    scheduler = OneCycleLR(optimizer, max_lr=cfg.get('lr', 1e-4) * 5,
+                          epochs=cfg['epochs'], steps_per_epoch=len(train_loader),
+                          pct_start=0.1, anneal_strategy='cos')
 
     # Training Loop
     best_val_loss = float('inf')
     train_loss_history, val_loss_history = [], []
     logger.info("Starting training...")
     for epoch in range(cfg['epochs']):
-        avg_train_loss = train_one_epoch(model, criterion, optimizer, train_loader, device, epoch, cfg['epochs'], logger)
+        avg_train_loss = train_one_epoch(model, criterion, optimizer, train_loader, device, epoch, cfg['epochs'], logger, scheduler=scheduler)
         train_loss_history.append(avg_train_loss)
 
         logger.info(f"--- Epoch {epoch+1}/{cfg['epochs']} Summary ---")
@@ -152,7 +168,6 @@ def main(cfg_path):
             torch.save(model.state_dict(), os.path.join(output_dir, f'epoch_{epoch + 1}.pth'))
 
         torch.save(model.state_dict(), os.path.join(output_dir, 'latest.pth'))
-        scheduler.step()
         logger.info(f"Current learning rate: {scheduler.get_last_lr()[0]:.8f}")
         logger.info("-------------------------")
 
