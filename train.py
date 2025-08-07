@@ -139,9 +139,9 @@ def main(cfg_path):
     train_loader = DataLoader(get_dataset({**cfg, 'split': 'train'}), batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(get_dataset({**cfg, 'split': 'val'}), batch_size=cfg['batch_size'], shuffle=False, num_workers=4, pin_memory=True) if do_validation else None
 
-    scheduler = OneCycleLR(optimizer, max_lr=cfg.get('lr', 1e-4) * 5,
+    scheduler = OneCycleLR(optimizer, max_lr=cfg.get('lr', 1e-4) * 20,
                           epochs=cfg['epochs'], steps_per_epoch=len(train_loader),
-                          pct_start=0.1, anneal_strategy='cos')
+                          pct_start=0.25, anneal_strategy='linear')
 
     # Training Loop
     best_val_loss = float('inf')
