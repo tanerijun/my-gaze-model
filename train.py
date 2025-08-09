@@ -141,7 +141,7 @@ def main(cfg_path):
 
     scheduler = OneCycleLR(optimizer, max_lr=cfg.get('lr', 1e-4) * 20,
                           epochs=cfg['epochs'], steps_per_epoch=len(train_loader),
-                          pct_start=0.25, anneal_strategy='linear')
+                          pct_start=0.25, anneal_strategy='cos')
 
     # Training Loop
     best_val_loss = float('inf')

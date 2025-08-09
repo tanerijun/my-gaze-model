@@ -87,17 +87,28 @@ def main(cfg_path, weights_path, fused):
     )
 
     total_error = 0.0
+    total_inference_time = 0.0
+    eval_start_time = time.time()
+
     with torch.no_grad():
         for imgs, _, cont_labels in tqdm(test_loader, desc="Evaluating"):
             imgs = imgs.to(device)
             cont_labels = cont_labels.to(device)
+
+            start_time = time.time()
             predictions = model(imgs)
+            total_inference_time += time.time() - start_time
+
             decoded_preds = decode_predictions(predictions, cfg)
             total_error += angular_error_3d(decoded_preds, cont_labels) * imgs.size(0)
 
+    total_eval_time = time.time() - eval_start_time
     mean_ang_error = total_error / len(test_dataset)
     logger.info("=================================================")
     logger.info(f"Mean Angular Error on the test set: {mean_ang_error:.2f} degrees")
+    logger.info(f"Total evaluation time: {total_eval_time:.3f} seconds")
+    logger.info(f"Total inference time: {total_inference_time:.3f} seconds")
+    logger.info(f"Average inference time per batch: {total_inference_time/len(test_loader):.3f} seconds")
     logger.info("=================================================")
 
 if __name__ == "__main__":
