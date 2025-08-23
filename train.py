@@ -1,6 +1,7 @@
 import yaml
 import argparse
 import os
+import math
 import torch
 import random
 import numpy as np
@@ -33,6 +34,14 @@ def set_random_seeds(seed=42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+def get_cosine_annealed_weight_decay(current_step, total_steps, initial_wd=1e-5, final_wd=1e-4):
+    """
+    Implements cosine annealing for weight decay as described in MobileOne paper.
+    """
+    cos_factor = 0.5 * (1 - math.cos(math.pi * current_step / total_steps))
+    annealed_wd = initial_wd + (final_wd - initial_wd) * cos_factor
+    return annealed_wd
+
 # --- Helper Function for a Single Training Epoch ---
 def train_one_epoch(model: torch.nn.Module,
                     criterion: GazeLoss,
@@ -47,11 +56,20 @@ def train_one_epoch(model: torch.nn.Module,
     Performs one full training epoch.
     """
     model.train()
+
     if isinstance(model.backbone, ResNetBackbone) and isinstance(model.backbone, HasFreezeBNStats):
         model.backbone.freeze_bn_stats()
 
     total_train_loss = 0
     for i, (imgs, binned_labels, cont_labels) in enumerate(data_loader):
+        # Weight decay annealing as described in mobileOne paper
+        current_step = epoch * len(data_loader) + i
+        total_steps = total_epochs * len(data_loader)
+        current_wd = get_cosine_annealed_weight_decay(current_step, total_steps)
+
+        for param_group in optimizer.param_groups:
+            param_group['weight_decay'] = current_wd
+
         imgs, binned_labels, cont_labels = imgs.to(device), binned_labels.to(device), cont_labels.to(device)
         optimizer.zero_grad()
         predictions = model(imgs)
