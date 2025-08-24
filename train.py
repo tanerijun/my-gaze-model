@@ -63,12 +63,12 @@ def train_one_epoch(model: torch.nn.Module,
     total_train_loss = 0
     for i, (imgs, binned_labels, cont_labels) in enumerate(data_loader):
         # Weight decay annealing as described in mobileOne paper
-        current_step = epoch * len(data_loader) + i
-        total_steps = total_epochs * len(data_loader)
-        current_wd = get_cosine_annealed_weight_decay(current_step, total_steps)
+        # current_step = epoch * len(data_loader) + i
+        # total_steps = total_epochs * len(data_loader)
+        # current_wd = get_cosine_annealed_weight_decay(current_step, total_steps)
 
-        for param_group in optimizer.param_groups:
-            param_group['weight_decay'] = current_wd
+        # for param_group in optimizer.param_groups:
+        #     param_group['weight_decay'] = current_wd
 
         imgs, binned_labels, cont_labels = imgs.to(device), binned_labels.to(device), cont_labels.to(device)
         optimizer.zero_grad()
@@ -154,12 +154,24 @@ def main(cfg_path):
         optimizer = torch.optim.AdamW(model.parameters(), lr=cfg.get('lr', 1e-4), weight_decay=1e-4)
 
     # DataLoaders
-    train_loader = DataLoader(get_dataset({**cfg, 'split': 'train'}), batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
-    val_loader = DataLoader(get_dataset({**cfg, 'split': 'val'}), batch_size=cfg['batch_size'], shuffle=False, num_workers=4, pin_memory=True) if do_validation else None
+    if cfg.get('final_model', False):
+        # For final model: combine train and val data
+        train_dataset = get_dataset({**cfg, 'split': 'train'})
+        val_dataset = get_dataset({**cfg, 'split': 'val'})
+        combined_dataset = torch.utils.data.ConcatDataset([train_dataset, val_dataset])
+
+        train_loader = DataLoader(combined_dataset, batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+        val_loader = None
+        do_validation = False
+
+        print(f"Final model training: Using {len(combined_dataset)} samples (train + val combined)")
+    else:
+        train_loader = DataLoader(get_dataset({**cfg, 'split': 'train'}), batch_size=cfg['batch_size'], shuffle=True, num_workers=4, pin_memory=True)
+        val_loader = DataLoader(get_dataset({**cfg, 'split': 'val'}), batch_size=cfg['batch_size'], shuffle=False, num_workers=4, pin_memory=True) if do_validation else None
 
     scheduler = OneCycleLR(optimizer, max_lr=cfg.get('lr', 1e-4) * 20,
-                          epochs=cfg['epochs'], steps_per_epoch=len(train_loader),
-                          pct_start=0.25, anneal_strategy='cos')
+                        epochs=cfg['epochs'], steps_per_epoch=len(train_loader),
+                        pct_start=0.25, anneal_strategy='cos')
 
     # Training Loop
     best_val_loss = float('inf')
@@ -182,7 +194,7 @@ def main(cfg_path):
                 torch.save(model.state_dict(), os.path.join(output_dir, 'best.pth'))
                 logger.info(f"New best model saved with validation loss: {best_val_loss:.4f}")
 
-        if (epoch + 1) % 10 == 0:
+        if ((epoch + 1) % 3 == 0) or ((epoch + 1) % 5 == 0):
             torch.save(model.state_dict(), os.path.join(output_dir, f'epoch_{epoch + 1}.pth'))
 
         torch.save(model.state_dict(), os.path.join(output_dir, 'latest.pth'))
