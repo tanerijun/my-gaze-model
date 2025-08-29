@@ -58,6 +58,7 @@ def main(cfg_path, weights_path, source, fused=False):
     def frame_producer():
         while not stop_event.is_set():
             ret, frame = cap.read()
+            frame = cv2.flip(frame, 1)
             if not ret:
                 stop_event.set()
                 break
