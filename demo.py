@@ -4,6 +4,8 @@ import cv2
 import numpy as np
 import torch
 import time
+import threading
+import queue
 from src.pipelines.gaze_pipeline import GazePipeline
 
 
@@ -49,18 +51,32 @@ def main(cfg_path, weights_path, source, fused=False):
         print(f"Error: Could not open video source '{source}'")
         return
 
-    # --- 3. Main Loop ---
-    while True:
+    # --- 3. Threaded Frame Capture and Processing ---
+    frame_queue = queue.Queue(maxsize=5)
+    stop_event = threading.Event()
+
+    def frame_producer():
+        while not stop_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                stop_event.set()
+                break
+            try:
+                frame_queue.put(frame, timeout=0.1)
+            except queue.Full:
+                continue
+
+    producer_thread = threading.Thread(target=frame_producer)
+    producer_thread.start()
+
+    while not stop_event.is_set():
         start_time = time.time()
+        try:
+            frame = frame_queue.get(timeout=0.5)
+        except queue.Empty:
+            continue
 
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        # Process frame with the pipeline
         results = pipeline(frame)
-
-        # Draw results on the frame
         for res in results:
             bbox = res["bbox"]
             gaze = res["gaze"]
@@ -80,8 +96,10 @@ def main(cfg_path, weights_path, source, fused=False):
         cv2.imshow("Gaze Estimation Demo", frame)
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
+            stop_event.set()
             break
 
+    producer_thread.join()
     cap.release()
     cv2.destroyAllWindows()
 

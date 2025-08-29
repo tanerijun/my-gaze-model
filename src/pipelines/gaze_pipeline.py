@@ -21,6 +21,14 @@ class GazePipeline:
         self.model.eval()
         print("Gaze estimation model loaded successfully.")
 
+        # --- JIT compilation for faster CPU inference ---
+        try:
+            self.model = torch.jit.script(self.model)
+            print("Model successfully compiled with TorchScript (JIT).")
+        except Exception as e:
+            print(f"TorchScript JIT compilation failed: {e}")
+            print("Proceeding with standard PyTorch model.")
+
         # --- Initialize Face Detector (New MediaPipe Tasks API) ---
         model_path = os.path.join("mediapipe_models", "blaze_face_short_range.tflite")
         if not os.path.exists(model_path):
