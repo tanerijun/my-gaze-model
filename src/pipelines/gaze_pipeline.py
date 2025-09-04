@@ -1,25 +1,82 @@
 import os
+
+import mediapipe as mp
+import numpy as np
 import torch
 import torch.nn.functional as F
-import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 from torchvision import transforms
+
 from src.models import build_model
+
+
+class KalmanBoxTracker:
+    def __init__(self):
+        # State: [x1, y1, x2, y2]
+        self.state = None
+        self.P = np.eye(4) * 100  # initial uncertainty
+        self.F = np.eye(4)
+        self.H = np.eye(4)
+
+        # Base parameters - tuned for stability
+        self.base_Q = np.eye(4) * 0.05  # process noise
+        self.base_R = np.eye(4) * 25.0  # measurement noise
+
+        # Current parameters (will be adjusted)
+        self.Q = self.base_Q.copy()
+        self.R = self.base_R.copy()
+
+        self.movement_threshold = 50  # pixels
+
+    def update(self, bbox):
+        z = np.array(bbox)
+
+        if self.state is None:
+            self.state = z
+            return bbox
+
+        # Calculate movement
+        movement = np.linalg.norm(z - self.state)
+
+        # Adaptive parameters
+        if movement > self.movement_threshold:
+            # High movement: trust measurements more
+            self.Q = self.base_Q * 20.0
+            self.R = self.base_R * 0.1
+        else:
+            # Low movement: prioritize stability
+            self.Q = self.base_Q * 0.2
+            self.R = self.base_R * 2.0
+
+        # Predict
+        self.state = self.F @ self.state
+        self.P = self.F @ self.P @ self.F.T + self.Q
+
+        # Update
+        y = z - self.H @ self.state
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+
+        self.state = self.state + K @ y
+        self.P = (np.eye(4) - K @ self.H) @ self.P
+
+        return [int(x) for x in self.state]
 
 
 class GazePipeline:
     def __init__(self, config, device, weights_path):
         self.config = config
         self.device = device
-
         is_fused = "fused" in config and config["fused"]
         model_kwargs = {"inference_mode": is_fused} if is_fused else {}
         self.model = build_model(config, **model_kwargs).to(device)
-
         self.model.load_state_dict(torch.load(weights_path, map_location=device))
         self.model.eval()
         print("Gaze estimation model loaded successfully.")
+
+        # Initialize Kalman Filter for bounding box smoothing
+        self.bbox_tracker = KalmanBoxTracker()
 
         # --- JIT compilation for faster CPU inference ---
         try:
@@ -39,7 +96,7 @@ class GazePipeline:
         base_options = python.BaseOptions(model_asset_path=model_path)
         options = vision.FaceDetectorOptions(
             base_options=base_options,
-            running_mode=vision.RunningMode.IMAGE,  # Process one image at a time
+            running_mode=vision.RunningMode.IMAGE,
         )
         self.face_detector = vision.FaceDetector.create_from_options(options)
         print("Face detector model loaded successfully.")
@@ -48,7 +105,6 @@ class GazePipeline:
         image_size = config.get("image_size", 224)
         print(f"Initializing GazePipeline with image size: {image_size}x{image_size}")
 
-        # This must be IDENTICAL to the transform used during training
         self.transform = transforms.Compose(
             [
                 transforms.ToTensor(),
@@ -62,7 +118,6 @@ class GazePipeline:
     def _decode_predictions(self, predictions):
         """
         Converts binned model output to continuous angular predictions.
-        This logic MUST match the regression loss calculation in GazeLoss.
         """
         pitch_pred, yaw_pred = predictions
         num_bins = self.config["num_bins"]
@@ -71,7 +126,7 @@ class GazePipeline:
         pitch_probs = F.softmax(pitch_pred, dim=1)
         yaw_probs = F.softmax(yaw_pred, dim=1)
 
-        # Calculate expected value (continuous angle) using the L2CS-Net logic
+        # Calculate expected value (continuous angle)
         pitch = torch.sum(pitch_probs * idx_tensor, 1) * 4 - 180
         yaw = torch.sum(yaw_probs * idx_tensor, 1) * 4 - 180
 
@@ -81,16 +136,10 @@ class GazePipeline:
     def __call__(self, frame):
         """
         Processes a single frame to detect faces and estimate gaze.
-        Args:
-            frame (np.ndarray): The input video frame (BGR).
-        Returns:
-            list: A list of dictionaries, one for each detected face.
-                  Each dict contains 'bbox' and 'gaze' (pitch, yaw in degrees).
         """
         h, w, _ = frame.shape
 
-        # --- Face Detection (New MediaPipe Tasks API) ---
-        # rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # --- Face Detection ---
         rgb_frame = frame
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         detection_result = self.face_detector.detect(mp_image)
@@ -110,13 +159,23 @@ class GazePipeline:
             x2 = min(w, bbox.origin_x + bbox.width)
             y2 = min(h, bbox.origin_y + bbox.height)
 
+            # Apply Kalman Filter bounding box smoothing
+            smoothed_bbox = self.bbox_tracker.update([x1, y1, x2, y2])
+            sx1, sy1, sx2, sy2 = smoothed_bbox
+
+            # Ensure smoothed bbox is still within bounds
+            sx1 = max(0, min(w - 1, sx1))
+            sy1 = max(0, min(h - 1, sy1))
+            sx2 = max(sx1 + 1, min(w, sx2))
+            sy2 = max(sy1 + 1, min(h, sy2))
+
             # Crop face and preprocess
-            crop = frame[y1:y2, x1:x2]
+            crop = frame[sy1:sy2, sx1:sx2]
             if crop.size == 0:
                 continue
 
             face_crops.append(self.transform(crop))
-            bboxes.append((x1, y1, x2, y2))
+            bboxes.append((sx1, sy1, sx2, sy2))
 
         if not face_crops:
             return []
@@ -138,4 +197,5 @@ class GazePipeline:
                     },
                 }
             )
+
         return output
