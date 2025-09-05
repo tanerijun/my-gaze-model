@@ -2,6 +2,11 @@
 WebSocket Service
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import argparse
 import asyncio
 import base64
@@ -16,7 +21,7 @@ import cv2
 import numpy as np
 import websockets
 
-from src import GazePipeline
+from src import GazePipeline3D
 
 
 class GazeService:
@@ -63,7 +68,7 @@ class GazeService:
 
         # Initialize gaze pipeline
         self.logger.info("Initializing gaze pipeline...")
-        self.pipeline = GazePipeline(
+        self.pipeline = GazePipeline3D(
             self.weights_path, device=self.device, smooth_gaze=self.smooth_gaze
         )
 
@@ -420,7 +425,7 @@ Examples:
     try:
         if args.test_camera:
             # Initialize pipeline for testing
-            service.pipeline = GazePipeline(
+            service.pipeline = GazePipeline3D(
                 args.weights, device=args.device, smooth_gaze=args.smooth_gaze
             )
             asyncio.run(test_camera_mode(service))

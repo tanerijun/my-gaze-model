@@ -72,11 +72,11 @@ python ws_service.py --weights model.pth --test-camera
 ### Programmatic Usage
 
 ```python
-from src import GazePipeline
+from src import GazePipeline3D
 import cv2
 
 # Initialize pipeline
-pipeline = GazePipeline("model.pth", device="auto")
+pipeline = GazePipeline3D("model.pth", device="auto")
 
 # Process frame
 cap = cv2.VideoCapture(0)
@@ -120,10 +120,10 @@ src/
 
 ## API Reference
 
-### GazePipeline
+### GazePipeline3D
 
 ```python
-class GazePipeline:
+class GazePipeline3D:
     def __init__(self, weights_path: str, device: str = "auto", image_size: int = 224)
     def __call__(self, frame: np.ndarray) -> List[Dict]
     def reset_tracking(self) -> None
@@ -228,9 +228,9 @@ python test_rest_client.py --benchmark photo.jpg --num-requests 20
 ```python
 # Simple real-time processing
 import cv2
-from src import GazePipeline
+from src import GazePipeline3D
 
-pipeline = GazePipeline("model.pth")
+pipeline = GazePipeline3D("model.pth")
 cap = cv2.VideoCapture(0)
 
 while True:

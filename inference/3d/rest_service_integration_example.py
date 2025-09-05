@@ -6,6 +6,11 @@ into a real-world application with proper error handling, logging,
 and performance monitoring.
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import asyncio
 import base64
 import logging

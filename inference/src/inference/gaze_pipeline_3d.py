@@ -11,7 +11,7 @@ from ..models import GazeModel
 from ..utils import GazeKalmanTracker, KalmanBoxTracker, batch_preprocess_faces
 
 
-class GazePipeline:
+class GazePipeline3D:
     def __init__(
         self,
         weights_path: str,

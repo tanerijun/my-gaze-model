@@ -2,6 +2,11 @@
 REST API Service for Gaze Estimation
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import argparse
 import base64
 import logging
@@ -15,7 +20,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from src import GazePipeline
+from src import GazePipeline3D
 
 
 class GazeResult(BaseModel):
@@ -68,7 +73,7 @@ class GazeRestService:
         self.start_time = time.time()
 
         # Initialize pipeline
-        self.pipeline = GazePipeline(
+        self.pipeline = GazePipeline3D(
             self.weights_path, device=self.device, smooth_gaze=self.smooth_gaze
         )
 

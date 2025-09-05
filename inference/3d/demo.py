@@ -11,6 +11,11 @@ Usage:
     python demo.py --weights path/to/model.pth --source video.mp4  # video file
 """
 
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import argparse
 import queue
 import threading
@@ -20,7 +25,7 @@ from typing import Tuple
 import cv2
 import numpy as np
 
-from src import GazePipeline
+from src import GazePipeline3D
 
 
 def draw_gaze(
@@ -145,7 +150,7 @@ def run_demo(
         smooth_gaze: Enable Kalman filtering for gaze vectors
     """
     print("Initializing gaze estimation pipeline...")
-    pipeline = GazePipeline(weights_path, device=device, smooth_gaze=smooth_gaze)
+    pipeline = GazePipeline3D(weights_path, device=device, smooth_gaze=smooth_gaze)
 
     print("Setting up video capture...")
     frame_producer = FrameProducer(source)
