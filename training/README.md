@@ -1,21 +1,23 @@
-# Gaze Tracker Model
+# Gaze Tracker Model - Training
 
-TODO: Add description, demo
+Code for the training of my gaze estimation models.
 
 ## Installation
 
 1. Clone repository
 2. `cd` into project. Note that every script is expected to be run from this directory
 3. Install dependencies
-  ```sh
-  uv sync # or check `pyproject.toml` for requirements if not using uv
-  ```
+
+```sh
+uv sync # or check `pyproject.toml` for requirements if not using uv
+```
 
 ## 1. Dataset Preparation
 
 This project supports the Gaze360 and MPIIFaceGaze datasets. You must download the raw data and then run the provided scripts to preprocess it into the format the model expects.
 
 The expected directory structure is:
+
 ```
 project-root/
 ├── data/
@@ -34,6 +36,7 @@ project-root/
 Download: Download the datasets and unzip them into `data/raw/Gaze360`, `data/raw/MPIIFaceGaze`
 
 Preprocess:
+
 - Important: Before running, you must edit the root and out_root paths at the top of the `preprocessing/gaze360.py` and `preprocessing/mpiifacegaze.py` scripts to match your local machine's paths.
 - Run the script:
   ```sh
@@ -48,6 +51,7 @@ All workflows are controlled by config files in the `configs/` directory.
 ### Gaze360 Workflow
 
 #### 1. Configure
+
 Create a YAML file in the `configs/` directory (e.g., `configs/gaze360_train.yaml`).
 
 ```yaml
@@ -80,13 +84,17 @@ split: "test"
 ```
 
 #### 2. Train
+
 Run the training script with your new config. The script will save the best model (based on validation loss) to `output/.../best.pth`.
+
 ```bash
 uv run python train.py --config configs/gaze360_train.yaml
 ```
 
 #### 3. Evaluate
+
 Use the evaluation script to test your trained model on the test set.
+
 ```bash
 uv run python eval.py --config configs/gaze360_eval.yaml --weights /path/to/your/output/.../best.pth
 ```
@@ -96,6 +104,7 @@ uv run python eval.py --config configs/gaze360_eval.yaml --weights /path/to/your
 This dataset uses **leave-one-person-out** cross-validation. The process involves holding out one person for testing and training on all others.
 
 #### 1. Configure
+
 Create a config file (e.g., `configs/mpiifacegaze_train.yaml`). Note that `do_validation` is set to `false`.
 
 ```yaml
@@ -133,6 +142,7 @@ split: "__PERSON_ID__" # this will be replaced by the trainer script
 ```
 
 #### 2. Train and Evaluate
+
 The output of the script is located at `output/mpii_loocv_results_<TIMESTAMP>`
 
 ```bash
@@ -142,15 +152,19 @@ uv run mpii_loocv/run.sh
 ## Additional Functionality
 
 ### Live Demo
+
 Run a live demo using your webcam. The script uses MediaPipe for face detection.
+
 ```bash
 uv run python demo.py --config /path/to/your/config.yaml --weights /path/to/your/best.pth
 ```
 
 ### MobileOne Model Optimization
+
 If you train a `MobileOne` backbone, you can fuse its branches to create an optimized model (no accuracy loss) for faster inference.
 
 **1. Reparameterize the Model:**
+
 ```bash
 # Output flag is optional, by default the script will output the fused model in the same foder as --weights
 uv run python reparameterize_mobileone.py --config /path/to/mobileone_training_config.yaml --weights /path/to/best.pth --output /path/to/best_fused.pth
@@ -158,6 +172,7 @@ uv run python reparameterize_mobileone.py --config /path/to/mobileone_training_c
 
 **2. Evaluate the Fused Model:**
 Use the `--fused` flag to tell the evaluation script to build the model in its inference-time configuration.
+
 ```bash
 uv run python eval.py --config /path/to/mobileone_training_config.yaml --weights /path/to/best_fused.pth --fused
 ```
