@@ -1,0 +1,18 @@
+[project]
+name = "gaze-inference"
+version = "1.0.0"
+description = "Gaze Inference Backend"
+readme = "README.md"
+requires-python = "==3.12.9"
+dependencies = [
+    "mediapipe>=0.10.14",
+    "numpy>=2.2.6",
+    "opencv-python>=4.12.0.88",
+    "torch>=2.7.1",
+    "torchvision>=0.22.1",
+    "websockets>=15.0.1",
+]
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
