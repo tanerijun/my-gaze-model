@@ -49,16 +49,29 @@ class CalibrationDemo:
 
         print("Calibration demo initialized")
 
+    # def _generate_calibration_grid(
+    #     self, w=1280, h=720, margin_ratio=0.05
+    # ) -> List[Tuple[int, int]]:
+    #     """
+    #     Generate 3x3 grid with points spread out and margin from edges.
+    #     """
+    #     margin_x = int(w * margin_ratio)
+    #     margin_y = int(h * margin_ratio)
+    #     grid_x = np.linspace(margin_x, w - margin_x, 3)
+    #     grid_y = np.linspace(margin_y, h - margin_y, 3)
+    #     points = [(int(x), int(y)) for y in grid_y for x in grid_x]
+    #     return points
+
     def _generate_calibration_grid(
         self, w=1280, h=720, margin_ratio=0.05
     ) -> List[Tuple[int, int]]:
         """
-        Generate 3x3 grid with points spread out and margin from edges.
+        Generate 4x3 grid (4 columns, 3 rows) with points spread out and margin from edges.
         """
         margin_x = int(w * margin_ratio)
         margin_y = int(h * margin_ratio)
-        grid_x = np.linspace(margin_x, w - margin_x, 3)
-        grid_y = np.linspace(margin_y, h - margin_y, 3)
+        grid_x = np.linspace(margin_x, w - margin_x, 4)  # 4 columns
+        grid_y = np.linspace(margin_y, h - margin_y, 3)  # 3 rows
         points = [(int(x), int(y)) for y in grid_y for x in grid_x]
         return points
 
