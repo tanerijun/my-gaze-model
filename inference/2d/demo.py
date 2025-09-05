@@ -45,6 +45,7 @@ class CalibrationDemo:
         self.current_point_gaze_vectors = []
 
         self.waiting_for_next = False  # for pausing during calibration
+        self.show_3d_arrow = False  # toggle showing 3D arrow (just like 3D demo)
 
         print("Calibration demo initialized")
 
@@ -197,20 +198,68 @@ class CalibrationDemo:
         if self.pipeline_2d is None:
             return frame, False
 
-        pog = self.pipeline_2d.predict(frame)
+        results = self.pipeline_2d.predict(frame)
 
-        if pog is not None:
-            h, w = frame.shape[:2]
-            # Clip coordinates to frame size
-            screen_x = max(0, min(w - 1, int(pog[0])))
-            screen_y = max(0, min(h - 1, int(pog[1])))
+        pog_detected = False
 
+        for result in results:
             # Draw POG
-            cv2.circle(frame, (screen_x, screen_y), 7, (0, 0, 255), -1)
-            cv2.circle(frame, (screen_x, screen_y), 10, (255, 255, 255), 2)
-            return frame, True
+            if "pog" in result:
+                h, w = frame.shape[:2]
+                pog_x = max(0, min(w - 1, int(result["pog"]["x"])))
+                pog_y = max(0, min(h - 1, int(result["pog"]["y"])))
 
-        return frame, False
+                cv2.circle(frame, (pog_x, pog_y), 7, (0, 0, 255), -1)
+                cv2.circle(frame, (pog_x, pog_y), 10, (255, 255, 255), 2)
+                pog_detected = True
+
+            # Draw 3D arrows if enabled
+            if self.show_3d_arrow:
+                bbox = result["bbox"]
+                gaze = result["gaze"]
+
+                # Draw bounding box
+                cv2.rectangle(
+                    frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
+                )
+
+                # Draw gaze vector
+                frame = self._draw_gaze(frame, bbox, gaze["pitch"], gaze["yaw"])
+
+        return frame, pog_detected
+
+    def _draw_gaze(
+        self,
+        image: np.ndarray,
+        bbox: Tuple[int, int, int, int],
+        pitch: float,
+        yaw: float,
+        color: Tuple[int, int, int] = (0, 255, 0),
+    ) -> np.ndarray:
+        """Draw gaze vector on the image."""
+        x1, y1, x2, y2 = bbox
+        center_x = int((x1 + x2) / 2)
+        center_y = int((y1 + y2) / 2)
+
+        # Convert degrees to radians
+        pitch_rad = np.radians(pitch)
+        yaw_rad = np.radians(yaw)
+
+        # Calculate gaze vector endpoint
+        length = 150
+        dx = -length * np.sin(pitch_rad) * np.cos(yaw_rad)
+        dy = -length * np.sin(yaw_rad)
+
+        end_point = (int(center_x + dx), int(center_y + dy))
+
+        # Draw the gaze vector
+        cv2.arrowedLine(image, (center_x, center_y), end_point, color, 2, tipLength=0.2)
+
+        # Draw angle text
+        text = f"P:{pitch:.1f}, Y:{yaw:.1f}"
+        cv2.putText(image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        return image
 
     def is_calibrated(self) -> bool:
         """Check if calibration is complete."""
@@ -252,6 +301,7 @@ def run_demo(
     print("'c' - Start calibration")
     print("'i' - Switch to inference mode (after calibration)")
     print("'r' - Reset and recalibrate")
+    print("'3' - Toggle 3D arrow display")
     print("'q' - Quit")
 
     mode = "calibration"
@@ -345,6 +395,8 @@ def run_demo(
                 demo.start_calibration()
             elif key == ord("t"):  # 't' for tracking reset
                 demo.reset_tracking()
+            elif key == ord("3"):  # '3' key to toggle 3D arrows
+                demo.show_3d_arrow = not demo.show_3d_arrow
             elif key == ord(" "):  # SPACE pressed
                 if mode == "calibration" and demo.waiting_for_next:
                     demo.next_calibration_point()
