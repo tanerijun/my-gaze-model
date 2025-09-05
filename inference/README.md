@@ -39,6 +39,36 @@ python demo.py --weights model.pth --source video.mp4
 python demo.py --weights model.pth --device cpu
 ```
 
+### REST API Service
+
+Start the REST API server:
+
+```bash
+# Start REST API on default port (8000)
+python rest_service.py --weights path/to/your/model.pth
+
+# Custom host and port
+python rest_service.py --weights model.pth --host 0.0.0.0 --port 8080
+
+# Force CPU inference
+python rest_service.py --weights model.pth --device cpu
+```
+
+### WebSocket Service
+
+Start the WebSocket server:
+
+```bash
+# Start WebSocket service on default port (8765)
+python ws_service.py --weights path/to/your/model.pth
+
+# Custom port
+python ws_service.py --weights model.pth --port 9000
+
+# Test with camera
+python ws_service.py --weights model.pth --test-camera
+```
+
 ### Programmatic Usage
 
 ```python
@@ -101,7 +131,87 @@ class GazePipeline:
 
 **Returns**: List of detections with `bbox` and `gaze` (pitch/yaw in degrees)
 
-## Demo Controls
+### REST API Endpoints
+
+#### POST /predict
+
+Upload image file for gaze estimation.
+
+```bash
+curl -X POST -F "file=@image.jpg" http://localhost:8000/predict
+```
+
+#### POST /predict_base64
+
+Send base64-encoded image for gaze estimation.
+
+```bash
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"image":"<base64_encoded_image>"}' \
+  http://localhost:8000/predict_base64
+```
+
+#### GET /status
+
+Get service status and statistics.
+
+```bash
+curl http://localhost:8000/status
+```
+
+#### POST /reset
+
+Reset tracking state.
+
+```bash
+curl -X POST http://localhost:8000/reset
+```
+
+#### GET /health
+
+Health check endpoint.
+
+```bash
+curl http://localhost:8000/health
+```
+
+**Response Format**:
+
+```json
+{
+  "results": [
+    {
+      "bbox": [x1, y1, x2, y2],
+      "gaze": {
+        "pitch": -5.2,
+        "yaw": 12.8
+      }
+    }
+  ],
+  "processing_time": 15.3,
+  "timestamp": 1234567890.123
+}
+```
+
+## Testing
+
+### Test REST API
+
+```bash
+# Check service health
+python test_rest_client.py --health
+
+# Test with image file
+python test_rest_client.py --image photo.jpg
+
+# Test with camera (10 seconds)
+python test_rest_client.py --camera --duration 10
+
+# Benchmark performance
+python test_rest_client.py --benchmark photo.jpg --num-requests 20
+```
+
+### Demo Controls
 
 - **Q**: Quit
 - **R**: Reset tracking
@@ -131,11 +241,3 @@ while True:
     results = pipeline(frame)
     # Process results...
 ```
-
-## Requirements
-
-- Python 3.8+
-- PyTorch 2.0+
-- OpenCV 4.8+
-- MediaPipe 0.10+
-- NumPy 1.24+
