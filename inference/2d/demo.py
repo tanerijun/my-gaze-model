@@ -44,6 +44,8 @@ class CalibrationDemo:
         # Current point data collection
         self.current_point_gaze_vectors = []
 
+        self.waiting_for_next = False  # for pausing during calibration
+
         print("Calibration demo initialized")
 
     def _generate_calibration_grid(
@@ -75,6 +77,33 @@ class CalibrationDemo:
         if not self.calibrating:
             return frame
 
+        # If waiting for user to continue
+        if self.waiting_for_next:
+            text = "Rest & blink. Press SPACE to continue."
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1
+            thickness = 3
+
+            # Get text size for centering
+            (text_width, text_height), _ = cv2.getTextSize(
+                text, font, font_scale, thickness
+            )
+
+            # Center the text
+            text_x = (w - text_width) // 2
+            text_y = (h + text_height) // 2
+
+            cv2.putText(
+                frame,
+                text,
+                (text_x, text_y),
+                font,
+                font_scale,
+                (0, 255, 255),
+                thickness,
+            )
+            return frame
+
         if self.current_point_idx >= len(self.calibration_points):
             # Calibration complete - train mapper
             self._train_mapper()
@@ -102,7 +131,7 @@ class CalibrationDemo:
                 gaze = results[0]["gaze"]
                 self.current_point_gaze_vectors.append([gaze["pitch"], gaze["yaw"]])
         else:
-            # Point duration complete - save data and move to next point
+            # Point duration complete - save data and wait for user
             if self.current_point_gaze_vectors:
                 # Select middle 11 frames
                 n = len(self.current_point_gaze_vectors)
@@ -112,18 +141,14 @@ class CalibrationDemo:
                         start : start + 11
                     ]
                 else:
-                    selected_vectors = (
-                        self.current_point_gaze_vectors
-                    )  # fallback if less than 11
+                    selected_vectors = self.current_point_gaze_vectors
 
                 self.mapper.add_calibration_point(selected_vectors, (point_x, point_y))
                 print(
                     f"Point {self.current_point_idx + 1}: collected {len(selected_vectors)} samples"
                 )
 
-            self.current_point_idx += 1
-            self.point_start_time = current_time
-            self.current_point_gaze_vectors = []
+            self.waiting_for_next = True
 
         # Draw progress
         progress = f"Point {self.current_point_idx + 1}/{len(self.calibration_points)}"
@@ -138,6 +163,13 @@ class CalibrationDemo:
         )
 
         return frame
+
+    def next_calibration_point(self):
+        """Advance to next calibration point after user presses key."""
+        self.current_point_idx += 1
+        self.point_start_time = time.time()
+        self.current_point_gaze_vectors = []
+        self.waiting_for_next = False
 
     def _train_mapper(self):
         """Train the mapper with collected calibration data."""
@@ -313,6 +345,9 @@ def run_demo(
                 demo.start_calibration()
             elif key == ord("t"):  # 't' for tracking reset
                 demo.reset_tracking()
+            elif key == ord(" "):  # SPACE pressed
+                if mode == "calibration" and demo.waiting_for_next:
+                    demo.next_calibration_point()
 
     except KeyboardInterrupt:
         print("\nDemo interrupted by user")
