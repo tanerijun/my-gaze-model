@@ -222,8 +222,8 @@ class CalibrationDemo:
             # Draw POG
             if "pog" in result:
                 h, w = frame.shape[:2]
-                pog_x = max(0, min(w - 1, int(result["pog"]["x"])))
-                pog_y = max(0, min(h - 1, int(result["pog"]["y"])))
+                pog_x = int(result["pog"]["x"])
+                pog_y = int(result["pog"]["y"])
 
                 cv2.circle(frame, (pog_x, pog_y), 7, (0, 0, 255), -1)
                 cv2.circle(frame, (pog_x, pog_y), 10, (255, 255, 255), 2)

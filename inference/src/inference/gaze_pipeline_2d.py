@@ -40,6 +40,8 @@ class GazePipeline2D:
         if not self.mapper.is_trained:
             raise ValueError("Mapper must be trained before inference")
 
+        h, w = frame.shape[:2]
+
         # Get 3D gaze results
         results_3d = self.pipeline_3d(frame)
 
@@ -52,9 +54,13 @@ class GazePipeline2D:
             # Map to screen coordinates
             pog_coords = self.mapper.predict(gaze_vector)
 
+            # Clip to screen bound
+            pog_x = max(0, min(w - 1, pog_coords[0]))
+            pog_y = max(0, min(h - 1, pog_coords[1]))
+
             # Create augmented result
             result_2d = result.copy()
-            result_2d["pog"] = {"x": pog_coords[0], "y": pog_coords[1]}
+            result_2d["pog"] = {"x": pog_x, "y": pog_y}
             results_2d.append(result_2d)
 
         return results_2d
