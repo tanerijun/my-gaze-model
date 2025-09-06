@@ -17,7 +17,7 @@ class GazePipeline3D:
         weights_path: str,
         device: str = "auto",
         image_size: int = 224,
-        use_landmarker: bool = True,
+        use_landmarker: bool = False,
         smooth_gaze: bool = False,
     ):
         """
