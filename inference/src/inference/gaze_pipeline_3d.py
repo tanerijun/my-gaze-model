@@ -17,6 +17,7 @@ class GazePipeline3D:
         weights_path: str,
         device: str = "auto",
         image_size: int = 224,
+        use_landmarker: bool = True,
         smooth_gaze: bool = False,
     ):
         """
@@ -30,6 +31,7 @@ class GazePipeline3D:
         """
         self.image_size = image_size
         self.device = self._setup_device(device)
+        self.use_landmarker = use_landmarker
 
         self.model = GazeModel()
         self._load_model_weights(weights_path)
@@ -39,7 +41,12 @@ class GazePipeline3D:
         # JIT compile for faster inference
         self._compile_model()
 
-        self._setup_face_detector()
+        if self.use_landmarker:
+            self._setup_face_landmarker()
+            print("Pipeline configured to use FaceLandmarker.")
+        else:
+            self._setup_face_detector()
+            print("Pipeline configured to use FaceDetector.")
 
         self.bbox_tracker = KalmanBoxTracker()  # for bbox smoothing
 
@@ -111,6 +118,26 @@ class GazePipeline3D:
         self.face_detector = vision.FaceDetector.create_from_options(options)
         print("Face detector initialized successfully")
 
+    def _setup_face_landmarker(self):
+        """Initialize MediaPipe FaceLandmarker."""
+        model_path = os.path.join("mediapipe_models", "face_landmarker.task")
+
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(
+                f"Face landmarker model not found at {model_path}. "
+                f"Please download face_landmarker.task and place it in the mediapipe_models folder."
+            )
+
+        base_options = python.BaseOptions(model_asset_path=model_path)
+        options = vision.FaceLandmarkerOptions(
+            base_options=base_options,
+            running_mode=vision.RunningMode.IMAGE,
+            output_facial_transformation_matrixes=True,  # for head pose
+            num_faces=1,  # optimize for single-person use
+        )
+        self.face_landmarker = vision.FaceLandmarker.create_from_options(options)
+        print("Face landmarker initialized successfully")
+
     @torch.no_grad()
     def __call__(self, frame):
         """
@@ -126,13 +153,15 @@ class GazePipeline3D:
         """
         h, w, _ = frame.shape
 
-        # Detect faces
-        face_detections = self._detect_faces(frame)
-        if not face_detections:
-            return []
+        if self.use_landmarker:
+            face_crops, bboxes, head_poses, all_landmarks = (
+                self._process_frame_with_landmarker(frame)
+            )
+        else:
+            face_crops, bboxes = self._process_frame_with_detector(frame)
+            head_poses = [None] * len(bboxes)  # placeholder
+            all_landmarks = [None] * len(bboxes)  # placeholder
 
-        # Extract and preprocess face crops
-        face_crops, bboxes = self._extract_face_crops(frame, face_detections)
         if not face_crops:
             return []
 
@@ -160,12 +189,14 @@ class GazePipeline3D:
                         "pitch": smoothed_pitch,
                         "yaw": smoothed_yaw,
                     },
+                    "head_pose_matrix": head_poses[i],  # None if not using landmarker
+                    "landmarks": all_landmarks[i],
                 }
             )
 
         return results
 
-    def _detect_faces(self, frame):
+    def _detect_faces_detector(self, frame):
         # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -173,10 +204,9 @@ class GazePipeline3D:
         detection_result = self.face_detector.detect(mp_image)
         return detection_result.detections
 
-    def _extract_face_crops(self, frame, detections):
+    def _extract_face_crops_detector(self, frame, detections):
         h, w, _ = frame.shape
-        face_crops = []
-        bboxes = []
+        face_crops, bboxes = [], []
 
         for detection in detections:
             bbox = detection.bounding_box
@@ -188,8 +218,7 @@ class GazePipeline3D:
             y2 = min(h, bbox.origin_y + bbox.height)
 
             # Apply Kalman filter for bbox smoothing
-            smoothed_bbox = self.bbox_tracker.update([x1, y1, x2, y2])
-            sx1, sy1, sx2, sy2 = smoothed_bbox
+            sx1, sy1, sx2, sy2 = self.bbox_tracker.update([x1, y1, x2, y2])
 
             # Ensure smoothed bbox is still within bounds
             sx1 = max(0, min(w - 1, sx1))
@@ -204,6 +233,51 @@ class GazePipeline3D:
                 bboxes.append((sx1, sy1, sx2, sy2))
 
         return face_crops, bboxes
+
+    def _process_frame_with_detector(self, frame):
+        detections = self._detect_faces_detector(frame)
+        return self._extract_face_crops_detector(frame, detections)
+
+    def _process_frame_with_landmarker(self, frame):
+        h, w, _ = frame.shape
+        face_crops, bboxes, head_poses, all_landmarks = [], [], [], []
+
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        detection_result = self.face_landmarker.detect(mp_image)
+
+        if not detection_result.face_landmarks:
+            return [], [], [], []
+
+        landmarks = detection_result.face_landmarks[0]
+        transform_matrix = detection_result.facial_transformation_matrixes[0]
+
+        bbox = self._get_bbox_from_landmarks(landmarks, (h, w))
+        sx1, sy1, sx2, sy2 = self.bbox_tracker.update(bbox)
+
+        crop = frame[sy1:sy2, sx1:sx2]
+        if crop.size > 0:
+            face_crops.append(crop)
+            bboxes.append((sx1, sy1, sx2, sy2))
+            head_poses.append(transform_matrix)
+            all_landmarks.append(landmarks)
+
+        return face_crops, bboxes, head_poses, all_landmarks
+
+    def _get_bbox_from_landmarks(self, landmarks, frame_shape, margin=0.1):
+        """Derive bounding box from landmarks"""
+        h, w = frame_shape
+        xs = [lm.x * w for lm in landmarks]
+        ys = [lm.y * h for lm in landmarks]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+        box_w, box_h = x_max - x_min, y_max - y_min
+        margin_w, margin_h = box_w * margin, box_h * margin
+        x1 = int(max(0, x_min - margin_w))
+        y1 = int(max(0, y_min - margin_h))
+        x2 = int(min(w - 1, x_max + margin_w))
+        y2 = int(min(h - 1, y_max + margin_h))
+        return x1, y1, x2, y2
 
     def reset_tracking(self):
         """Reset both bbox and gaze tracking states."""

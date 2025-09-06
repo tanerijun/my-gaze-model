@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Streamlined Gaze Estimation Demo
 
@@ -66,9 +65,51 @@ def draw_gaze(
     # Draw the gaze vector
     cv2.arrowedLine(image, (center_x, center_y), end_point, color, 2, tipLength=0.2)
 
-    # Draw angle text
-    text = f"P:{pitch:.1f}, Y:{yaw:.1f}"
-    cv2.putText(image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    return image
+
+
+def draw_head_pose_axis(
+    image: np.ndarray,
+    landmarks: list,  # Takes landmarks now
+    rotation_vector: np.ndarray,
+    translation_vector: np.ndarray,
+    cam_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+) -> np.ndarray:
+    """
+    Draw the 3D head pose axis (roll, pitch, yaw) on the image.
+
+    Args:
+        image: The input frame.
+        landmarks: The list of landmark objects from MediaPipe.
+        rotation_vector: The rotation vector from the head pose.
+        translation_vector: The translation vector from the head pose.
+        cam_matrix: The camera intrinsic matrix.
+        dist_coeffs: The camera distortion coefficients.
+
+    Returns:
+        The image with the 3D axis drawn.
+    """
+    # Define the 3D points for the axis tips.
+    axis_points = np.array([[75, 0, 0], [0, -75, 0], [0, 0, 75]], dtype=np.float32)
+
+    # Project the 3D axis tips onto the 2D image plane.
+    imgpts, _ = cv2.projectPoints(
+        axis_points, rotation_vector, translation_vector, cam_matrix, dist_coeffs
+    )
+
+    # Use Landmark #1 (nose bridge) as the consistent origin point
+    frame_h, frame_w, _ = image.shape
+    origin_landmark = landmarks[1]
+    origin = (int(origin_landmark.x * frame_w), int(origin_landmark.y * frame_h))
+
+    # Convert projected points to integer coordinates.
+    imgpts = np.int32(imgpts).reshape(-1, 2)
+
+    # Draw the axes lines on the image.
+    cv2.line(image, origin, tuple(imgpts[0]), (0, 0, 255), 3)  # X-axis: Red
+    cv2.line(image, origin, tuple(imgpts[1]), (0, 255, 0), 3)  # Y-axis: Green
+    cv2.line(image, origin, tuple(imgpts[2]), (255, 0, 0), 3)  # Z-axis: Blue
 
     return image
 
@@ -106,10 +147,6 @@ class FrameProducer:
             if not ret:
                 self.stop_event.set()
                 break
-
-            # Flip frame for webcam (mirror effect)
-            if isinstance(self.video_source, int) or self.video_source.isdigit():
-                frame = cv2.flip(frame, 1)
 
             try:
                 self.frame_queue.put(frame, timeout=0.1)
@@ -155,6 +192,12 @@ def run_demo(
     print("Setting up video capture...")
     frame_producer = FrameProducer(source)
 
+    is_webcam = source.isdigit()
+
+    # Camera intrinsics
+    cam_matrix = None
+    dist_coeffs = np.zeros((4, 1))
+
     try:
         frame_producer.start()
         print(f"Started video capture from: {source}")
@@ -167,6 +210,14 @@ def run_demo(
             frame = frame_producer.get_frame()
             if frame is None:
                 continue
+
+            # Estimate camera matrix on first frame
+            if cam_matrix is None:
+                h, w = frame.shape[:2]
+                # Simple approximation of the camera intrinsic matrix
+                cam_matrix = np.array(
+                    [[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]], dtype=np.float32
+                )
 
             # Process frame for gaze estimation
             results = pipeline(frame)
@@ -183,6 +234,28 @@ def run_demo(
 
                 # Draw gaze vector
                 frame = draw_gaze(frame, bbox, gaze["pitch"], gaze["yaw"])
+
+                head_pose_matrix = result.get("head_pose_matrix")
+                landmarks = result.get("landmarks")
+                if head_pose_matrix is not None and landmarks is not None:
+                    rotation_matrix = head_pose_matrix[:3, :3]
+                    rotation_vector, _ = cv2.Rodrigues(rotation_matrix)
+                    translation_vector = head_pose_matrix[:3, 3]
+
+                    # This aligns MediaPipe's (+Y UP) with OpenCV's (+Y DOWN)
+                    rotation_vector[0] *= -1
+
+                    frame = draw_head_pose_axis(
+                        frame,
+                        landmarks,
+                        rotation_vector,
+                        translation_vector,
+                        cam_matrix,
+                        dist_coeffs,
+                    )
+
+            if is_webcam:
+                frame = cv2.flip(frame, 1)
 
             # Calculate and display FPS
             fps = 1.0 / (time.time() - start_time)
