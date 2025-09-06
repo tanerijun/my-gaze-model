@@ -46,6 +46,9 @@ class CalibrationDemo:
 
         self.waiting_for_next = False  # for pausing during calibration
         self.show_3d_arrow = False  # toggle showing 3D arrow (just like 3D demo)
+        self.testing_mode = False  # Add moving target
+        self.test_point_start_time = time.time()
+        self.test_trajectory = "square"
 
         print("Calibration demo initialized")
 
@@ -239,6 +242,9 @@ class CalibrationDemo:
                 # Draw gaze vector
                 frame = self._draw_gaze(frame, bbox, gaze["pitch"], gaze["yaw"])
 
+        if self.testing_mode:
+            frame = self._draw_test_point(frame)
+
         return frame, pog_detected
 
     def _draw_gaze(
@@ -273,6 +279,67 @@ class CalibrationDemo:
         cv2.putText(image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
         return image
+
+    def _draw_test_point(self, frame: np.ndarray) -> np.ndarray:
+        """Draw the moving test point."""
+        h, w = frame.shape[:2]
+        test_x, test_y = self._get_test_point_position(w, h)
+
+        # Draw test point (larger, different color from POG)
+        cv2.circle(frame, (test_x, test_y), 12, (255, 255, 0), -1)  # Cyan filled circle
+        cv2.circle(frame, (test_x, test_y), 16, (255, 255, 255), 2)  # White outline
+
+        # Add label
+        cv2.putText(
+            frame,
+            "TARGET",
+            (test_x - 30, test_y - 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 255),
+            2,
+        )
+
+        return frame
+
+    def _get_test_point_position(
+        self, frame_width: int, frame_height: int
+    ) -> Tuple[int, int]:
+        """Calculate current test point position based on trajectory."""
+        margin = 100  # Keep point away from edges
+        w = frame_width - 2 * margin
+        h = frame_height - 2 * margin
+        x, y = 0, 0
+
+        # Time-based animation
+        cycle_duration = 30.0
+        elapsed = (time.time() - self.test_point_start_time) % cycle_duration
+        progress = elapsed / cycle_duration  # 0.0 to 1.0
+
+        if self.test_trajectory == "square":
+            # Square path: top edge -> right edge -> bottom edge -> left edge
+            if progress < 0.25:  # Top edge (left to right)
+                t = progress * 4
+                x = margin + int(t * w)
+                y = margin
+            elif progress < 0.5:  # Right edge (top to bottom)
+                t = (progress - 0.25) * 4
+                x = margin + w
+                y = margin + int(t * h)
+            elif progress < 0.75:  # Bottom edge (right to left)
+                t = (progress - 0.5) * 4
+                x = margin + w - int(t * w)
+                y = margin + h
+            else:  # Left edge (bottom to top)
+                t = (progress - 0.75) * 4
+                x = margin
+                y = margin + h - int(t * h)
+
+        # Add more trajectories here later
+        # elif self.test_trajectory == "diagonal":
+        # # Diagonal movement implementation
+
+        return (x, y)
 
     def is_calibrated(self) -> bool:
         """Check if calibration is complete."""
@@ -315,6 +382,7 @@ def run_demo(
     print("'i' - Switch to inference mode (after calibration)")
     print("'r' - Reset and recalibrate")
     print("'3' - Toggle 3D arrow display")
+    print("'t' - Toggle testing mode (moving target)")
     print("'q' - Quit")
 
     mode = "calibration"
@@ -406,10 +474,12 @@ def run_demo(
             elif key == ord("r"):
                 mode = "calibration"
                 demo.start_calibration()
-            elif key == ord("t"):  # 't' for tracking reset
-                demo.reset_tracking()
             elif key == ord("3"):  # '3' key to toggle 3D arrows
                 demo.show_3d_arrow = not demo.show_3d_arrow
+            elif key == ord("t"):  # 't' key to toggle testing mode
+                demo.testing_mode = not demo.testing_mode
+                if demo.testing_mode:
+                    demo.test_point_start_time = time.time()  # reset animation
             elif key == ord(" "):  # SPACE pressed
                 if mode == "calibration" and demo.waiting_for_next:
                     demo.next_calibration_point()
