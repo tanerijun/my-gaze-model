@@ -274,10 +274,6 @@ class CalibrationDemo:
         # Draw the gaze vector
         cv2.arrowedLine(image, (center_x, center_y), end_point, color, 2, tipLength=0.2)
 
-        # Draw angle text
-        text = f"P:{pitch:.1f}, Y:{yaw:.1f}"
-        cv2.putText(image, text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
         return image
 
     def _draw_test_point(self, frame: np.ndarray) -> np.ndarray:
@@ -367,13 +363,14 @@ def run_demo(
         source_int = int(source)
     except ValueError:
         source_int = source
+    is_webcam = isinstance(source_int, int)
 
     cap = cv2.VideoCapture(source_int)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
 
     # Setup for webcam
-    if isinstance(source_int, int):
+    if is_webcam:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 
