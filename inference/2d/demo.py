@@ -350,11 +350,17 @@ def run_demo(
     weights_path: str,
     source: str = "0",
     device: str = "auto",
+    smooth_facebbox: bool = False,
     smooth_gaze: bool = False,
 ):
     """Run the 2D gaze estimation demo with calibration."""
     print("Initializing 3D gaze estimation pipeline...")
-    pipeline_3d = GazePipeline3D(weights_path, device=device, smooth_gaze=smooth_gaze)
+    pipeline_3d = GazePipeline3D(
+        weights_path,
+        device=device,
+        smooth_facebbox=smooth_facebbox,
+        smooth_gaze=smooth_gaze,
+    )
 
     demo = CalibrationDemo(pipeline_3d)
 
@@ -500,11 +506,18 @@ def main():
         "--device", type=str, default="auto", choices=["auto", "cpu", "cuda"]
     )
     parser.add_argument(
+        "--smooth-facebbox",
+        action="store_true",
+        help="Enable face bounding box smoothing",
+    )
+    parser.add_argument(
         "--smooth-gaze", action="store_true", help="Enable gaze smoothing"
     )
 
     args = parser.parse_args()
-    run_demo(args.weights, args.source, args.device, args.smooth_gaze)
+    run_demo(
+        args.weights, args.source, args.device, args.smooth_facebbox, args.smooth_gaze
+    )
 
 
 if __name__ == "__main__":

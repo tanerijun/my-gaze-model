@@ -249,7 +249,7 @@ def main(args):
     pipeline_3d = GazePipeline3D(
         weights_path=args.weights,
         device="cuda" if torch.cuda.is_available() else "cpu",
-        use_landmarker=False,
+        smooth_facebbox=True,
         smooth_gaze=True,
     )
 

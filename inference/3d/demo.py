@@ -175,6 +175,7 @@ def run_demo(
     weights_path: str,
     source: str = "0",
     device: str = "auto",
+    smooth_facebbox: bool = False,
     smooth_gaze: bool = False,
 ):
     """
@@ -184,10 +185,17 @@ def run_demo(
         weights_path: Path to the trained model weights
         source: Video source (webcam index or video file path)
         device: Compute device ("cpu", "cuda", or "auto")
+        smooth_gaze: Enable Kalman filtering for face bbox
         smooth_gaze: Enable Kalman filtering for gaze vectors
     """
     print("Initializing gaze estimation pipeline...")
-    pipeline = GazePipeline3D(weights_path, device=device, smooth_gaze=smooth_gaze)
+    pipeline = GazePipeline3D(
+        weights_path,
+        device=device,
+        smooth_facebbox=smooth_facebbox,
+        smooth_gaze=smooth_gaze,
+        enable_landmarker_features=False,
+    )
 
     print("Setting up video capture...")
     frame_producer = FrameProducer(source)
@@ -327,6 +335,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--smooth-facebbox",
+        action="store_true",
+        help="Enable Kalman filtering for face bbox (smoother but less responsive)",
+    )
+
+    parser.add_argument(
         "--smooth-gaze",
         action="store_true",
         help="Enable Kalman filtering for gaze vectors (smoother but less responsive)",
@@ -343,7 +357,9 @@ Examples:
     print(f"Gaze smoothing: {args.smooth_gaze}")
     print("=" * 50)
 
-    run_demo(args.weights, args.source, args.device, args.smooth_gaze)
+    run_demo(
+        args.weights, args.source, args.device, args.smooth_facebbox, args.smooth_gaze
+    )
 
 
 if __name__ == "__main__":

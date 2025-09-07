@@ -17,7 +17,7 @@ class GazePipeline3D:
         weights_path: str,
         device: str = "auto",
         image_size: int = 224,
-        use_landmarker: bool = False,
+        enable_landmarker_features: bool = False,
         smooth_facebbox: bool = False,
         smooth_gaze: bool = False,
     ):
@@ -28,13 +28,22 @@ class GazePipeline3D:
             weights_path: Path to the trained model weights (.pth file)
             device: Device to run inference on ("cpu", "cuda", or "auto")
             image_size: Input image size for the model (default 224 to match training)
-            use_landmarker: Use Mediapipe Face Landmarker instead of Blaze for face detection
+            enable_landmarker_features: If True, runs FaceLandmarker to get head pose and landmarks (default false for speed) (assume only 1 face)
             smooth_facebbox: Enable Kalman filtering for face bounding box (default false)
             smooth_gaze: Enable Kalman filtering for gaze vectors (default False)
         """
         self.image_size = image_size
         self.device = self._setup_device(device)
-        self.use_landmarker = use_landmarker
+        self.enable_landmarker_features = enable_landmarker_features
+
+        self._setup_face_detector()
+
+        if self.enable_landmarker_features:
+            self._setup_face_landmarker()
+            print("Landmarker features ENABLED (for head pose and landmarks).")
+        else:
+            print("Landmarker features DISABLED (default, max performance).")
+            self.face_landmarker = None
 
         self.model = GazeModel()
         self._load_model_weights(weights_path)
@@ -43,13 +52,6 @@ class GazePipeline3D:
 
         # JIT compile for faster inference
         self._compile_model()
-
-        if self.use_landmarker:
-            self._setup_face_landmarker()
-            print("Pipeline configured to use FaceLandmarker.")
-        else:
-            self._setup_face_detector()
-            print("Pipeline configured to use FaceDetector.")
 
         self.bbox_tracker = KalmanBoxTracker(enabled=smooth_facebbox)
         if smooth_facebbox:
@@ -142,7 +144,7 @@ class GazePipeline3D:
             base_options=base_options,
             running_mode=vision.RunningMode.IMAGE,
             output_facial_transformation_matrixes=True,  # for head pose
-            num_faces=1,  # optimize for single-person use
+            num_faces=1,  # optimize for single-person use; Smoothing is only applied when n_face == 1
         )
         self.face_landmarker = vision.FaceLandmarker.create_from_options(options)
         print("Face landmarker initialized successfully")
@@ -153,26 +155,47 @@ class GazePipeline3D:
         Process a frame to detect faces and estimate gaze directions.
 
         Args:
-            frame: Input frame as numpy array (H, W, 3) in BGR format
+            frame: The input video frame as a NumPy array (H, W, 3) in BGR format.
 
         Returns:
-            list: List of detection results, each containing:
-                - "bbox": Bounding box [x1, y1, x2, y2]
-                - "gaze": Dict with "pitch" and "yaw" angles in degrees
+            A list of dictionaries, where each dictionary contains the results for one
+            detected face. The list is empty if no faces are found. The dictionary
+            has the following structure:
+            ```
+            {
+                "bbox": Tuple[int, int, int, int],
+                "gaze": Dict[str, float],
+                "head_pose_matrix": Optional[np.ndarray],
+                "landmarks": Optional[List[mp.tasks.python.vision.NormalizedLandmark]]
+            }
+            ```
+            - `bbox`: The smoothed bounding box (x1, y1, x2, y2) of the face.
+            - `gaze`: A dictionary with "pitch" and "yaw" keys in degrees.
+            - `head_pose_matrix`: A 4x4 NumPy array representing the 3D head
+                transformation matrix. Is `None` if `enable_landmarker_features` is False.
+            - `landmarks`: A list of MediaPipe NormalizedLandmark objects. Is `None`
+                if `enable_landmarker_features` is False.
         """
-        h, w, _ = frame.shape
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        detection_result = self.face_detector.detect(mp_image)
+        detections = detection_result.detections
+        if not detections:
+            return []
 
-        if self.use_landmarker:
-            face_crops, bboxes, head_poses, all_landmarks = (
-                self._process_frame_with_landmarker(frame)
-            )
-        else:
-            face_crops, bboxes = self._process_frame_with_detector(frame)
-            head_poses = [None] * len(bboxes)  # placeholder
-            all_landmarks = [None] * len(bboxes)  # placeholder
-
+        face_crops, bboxes = self._extract_face_crops_detector(frame, detections)
         if not face_crops:
             return []
+
+        head_pose, landmarks = None, None
+        if self.enable_landmarker_features and self.face_landmarker:
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            landmarker_result = self.face_landmarker.detect(mp_image)
+
+            if landmarker_result.facial_transformation_matrixes:
+                head_pose = landmarker_result.facial_transformation_matrixes[0]
+                landmarks = landmarker_result.face_landmarks[0]
 
         # Batch process faces through gaze model
         face_batch = batch_preprocess_faces(face_crops, self.image_size)
@@ -198,20 +221,12 @@ class GazePipeline3D:
                         "pitch": smoothed_pitch,
                         "yaw": smoothed_yaw,
                     },
-                    "head_pose_matrix": head_poses[i],  # None if not using landmarker
-                    "landmarks": all_landmarks[i],
+                    "head_pose_matrix": head_pose,
+                    "landmarks": landmarks,
                 }
             )
 
         return results
-
-    def _detect_faces_detector(self, frame):
-        # Convert BGR to RGB for MediaPipe
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-
-        detection_result = self.face_detector.detect(mp_image)
-        return detection_result.detections
 
     def _extract_face_crops_detector(self, frame, detections):
         h, w, _ = frame.shape
@@ -242,36 +257,6 @@ class GazePipeline3D:
                 bboxes.append((sx1, sy1, sx2, sy2))
 
         return face_crops, bboxes
-
-    def _process_frame_with_detector(self, frame):
-        detections = self._detect_faces_detector(frame)
-        return self._extract_face_crops_detector(frame, detections)
-
-    def _process_frame_with_landmarker(self, frame):
-        h, w, _ = frame.shape
-        face_crops, bboxes, head_poses, all_landmarks = [], [], [], []
-
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-        detection_result = self.face_landmarker.detect(mp_image)
-
-        if not detection_result.face_landmarks:
-            return [], [], [], []
-
-        landmarks = detection_result.face_landmarks[0]
-        transform_matrix = detection_result.facial_transformation_matrixes[0]
-
-        bbox = self._get_bbox_from_landmarks(landmarks, (h, w))
-        sx1, sy1, sx2, sy2 = self.bbox_tracker.update(bbox)
-
-        crop = frame[sy1:sy2, sx1:sx2]
-        if crop.size > 0:
-            face_crops.append(crop)
-            bboxes.append((sx1, sy1, sx2, sy2))
-            head_poses.append(transform_matrix)
-            all_landmarks.append(landmarks)
-
-        return face_crops, bboxes, head_poses, all_landmarks
 
     def _get_bbox_from_landmarks(self, landmarks, frame_shape, margin=0.1):
         """Derive bounding box from landmarks"""
