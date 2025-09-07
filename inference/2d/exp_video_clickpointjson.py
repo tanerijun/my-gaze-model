@@ -158,7 +158,7 @@ def prepare_test_data(
     return test_frame_indices, np.array(y_test)
 
 
-def analyze_and_plot_results(results_df: pd.DataFrame, output_path: str):
+def analyze_and_plot_results(results_df: pd.DataFrame, output_dir: str):
     """
     Calculates summary statistics and generates a prediction vs. ground truth plot
     with unique colors for each point pair.
@@ -173,12 +173,21 @@ def analyze_and_plot_results(results_df: pd.DataFrame, output_path: str):
     std_error = results_df["error"].std()
     percentile_95 = results_df["error"].quantile(0.95)
 
-    print("\n--- Experiment Results ---")
-    print(f"Mean Pixel Error:     {mean_error:.2f} pixels")
-    print(f"Median Pixel Error:   {median_error:.2f} pixels")
-    print(f"Std Dev of Error:     {std_error:.2f} pixels")
-    print(f"95th Percentile Error: {percentile_95:.2f} pixels")
-    print("--------------------------\n")
+    stats_string = (
+        f"--- Experiment Results ---\n"
+        f"Mean Pixel Error:     {mean_error:.2f} pixels\n"
+        f"Median Pixel Error:   {median_error:.2f} pixels\n"
+        f"Std Dev of Error:     {std_error:.2f} pixels\n"
+        f"95th Percentile Error: {percentile_95:.2f} pixels\n"
+        f"--------------------------"
+    )
+
+    print(f"\n{stats_string}\n")
+
+    stats_path = os.path.join(output_dir, "stats.txt")
+    with open(stats_path, 'w') as f:
+        f.write(stats_string)
+    print(f"Summary statistics saved to: {stats_path}")
 
     # --- Generate Plot ---
     num_points = len(results_df)
@@ -221,8 +230,9 @@ def analyze_and_plot_results(results_df: pd.DataFrame, output_path: str):
     plt.legend()
     plt.grid(True)
     plt.axis("equal")
-    plt.savefig(output_path, dpi=150)
-    print(f"Analysis plot saved to: {output_path}")
+    plot_path = os.path.join(output_dir, "pred_vs_gt.png")
+    plt.savefig(plot_path, dpi=150)
+    print(f"Analysis plot saved to: {plot_path}")
     plt.close()
 
 
@@ -317,8 +327,7 @@ def main(args):
     results_df = pd.DataFrame(results)
 
     os.makedirs(args.output_dir, exist_ok=True)
-    plot_path = os.path.join(args.output_dir, "baseline_gaze_only_results.png")
-    analyze_and_plot_results(results_df, plot_path)
+    analyze_and_plot_results(results_df, args.output_dir)
 
 
 if __name__ == "__main__":
