@@ -7,7 +7,11 @@ class KalmanBoxTracker:
     Provides adaptive noise parameters based on movement detection.
     """
 
-    def __init__(self):
+    def __init__(self, enabled: bool = True):
+        self.enabled = enabled
+        if not self.enabled:
+            return
+
         # State: [x1, y1, x2, y2]
         self.state = None
         self.P = np.eye(4) * 100  # initial uncertainty
@@ -34,6 +38,9 @@ class KalmanBoxTracker:
         Returns:
             list: Smoothed bounding box coordinates [x1, y1, x2, y2]
         """
+        if not self.enabled:
+            return [int(x) for x in bbox]
+
         z = np.array(bbox, dtype=np.float32)
 
         if self.state is None:
@@ -70,6 +77,9 @@ class KalmanBoxTracker:
 
     def reset(self):
         """Reset the tracker state."""
+        if not self.enabled:
+            return
+
         self.state = None
         self.P = np.eye(4) * 100
         self.Q = self.base_Q.copy()

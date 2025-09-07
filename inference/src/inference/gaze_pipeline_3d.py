@@ -18,6 +18,7 @@ class GazePipeline3D:
         device: str = "auto",
         image_size: int = 224,
         use_landmarker: bool = False,
+        smooth_facebbox: bool = False,
         smooth_gaze: bool = False,
     ):
         """
@@ -27,6 +28,8 @@ class GazePipeline3D:
             weights_path: Path to the trained model weights (.pth file)
             device: Device to run inference on ("cpu", "cuda", or "auto")
             image_size: Input image size for the model (default 224 to match training)
+            use_landmarker: Use Mediapipe Face Landmarker instead of Blaze for face detection
+            smooth_facebbox: Enable Kalman filtering for face bounding box (default false)
             smooth_gaze: Enable Kalman filtering for gaze vectors (default False)
         """
         self.image_size = image_size
@@ -48,11 +51,17 @@ class GazePipeline3D:
             self._setup_face_detector()
             print("Pipeline configured to use FaceDetector.")
 
-        self.bbox_tracker = KalmanBoxTracker()  # for bbox smoothing
+        self.bbox_tracker = KalmanBoxTracker(enabled=smooth_facebbox)
+        if smooth_facebbox:
+            print("Face bounding box smoothing ENABLED.")
+        else:
+            print("Face bounding box smoothing DISABLED.")
 
         self.gaze_tracker = GazeKalmanTracker(enabled=smooth_gaze)
         if smooth_gaze:
-            print("Gaze smoothing enabled - set smooth_gaze=False to disable")
+            print("Gaze smoothing ENABLED.")
+        else:
+            print("Gaze smoothing DISABLED.")
 
         print("Gaze estimation pipeline initialized successfully")
 

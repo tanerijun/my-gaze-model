@@ -41,7 +41,7 @@ class GazeKalmanTracker:
         self.R = self.base_R.copy()
 
         # Movement threshold in degrees
-        self.movement_threshold = 8.0  # degrees
+        self.movement_threshold = 2.0  # degrees
 
     def update(self, pitch: float, yaw: float) -> Tuple[float, float]:
         """
