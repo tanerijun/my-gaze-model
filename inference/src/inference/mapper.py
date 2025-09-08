@@ -13,21 +13,21 @@ class Mapper:
         self.is_trained = False
 
         # Store training data for inspection/retraining
-        self.training_gaze_vectors = []
+        self.training_feature_vectors = []
         self.training_screen_points = []
 
     def add_calibration_point(
-        self, gaze_vectors: List[List[float]], target_point: Tuple[float, float]
+        self, feature_vectors: List[List[float]], target_point: Tuple[float, float]
     ):
         """
         Add calibration data for one target point.
 
         Args:
-            gaze_vectors: List of [pitch, yaw] vectors from multiple frames
+            feature_vectors: List of feature vectors from multiple frames. e.g., [pitch, yaw, eye_x, eye_y, ipd, roll]
             target_point: (x, y) screen coordinates for this calibration point
         """
-        for gaze_vector in gaze_vectors:
-            self.training_gaze_vectors.append(gaze_vector)
+        for feature_vector in feature_vectors:
+            self.training_feature_vectors.append(feature_vector)
             self.training_screen_points.append(target_point)
 
     def train(self) -> Tuple[float, float]:
@@ -37,11 +37,11 @@ class Mapper:
         Returns:
             Tuple[float, float]: R² scores for x and y coordinates
         """
-        if len(self.training_gaze_vectors) == 0:
+        if len(self.training_feature_vectors) == 0:
             raise ValueError("No calibration data available for training")
 
-        X = np.array(self.training_gaze_vectors)  # [N, 2] - pitch, yaw
-        screen_points = np.array(self.training_screen_points)  # [N, 2] - x, y
+        X = np.array(self.training_feature_vectors)
+        screen_points = np.array(self.training_screen_points)
 
         y_x = screen_points[:, 0]  # x coordinates
         y_y = screen_points[:, 1]  # y coordinates
@@ -63,7 +63,7 @@ class Mapper:
         Map gaze vector to screen coordinates.
 
         Args:
-            gaze_vector: [pitch, yaw] in degrees
+            feature_vector: A list of features (e.g., [pitch, yaw, ...])
 
         Returns:
             Tuple[float, float]: Predicted screen coordinates (x, y)
@@ -79,7 +79,7 @@ class Mapper:
 
     def reset(self):
         """Reset all training data and models."""
-        self.training_gaze_vectors = []
+        self.training_feature_vectors = []
         self.training_screen_points = []
         self.is_trained = False
         self.model_x = LinearRegression()
@@ -88,6 +88,6 @@ class Mapper:
     def get_training_stats(self) -> dict:
         """Get statistics about training data."""
         return {
-            "num_samples": len(self.training_gaze_vectors),
+            "num_samples": len(self.training_feature_vectors),
             "is_trained": self.is_trained,
         }

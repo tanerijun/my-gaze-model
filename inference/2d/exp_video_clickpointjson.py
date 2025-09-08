@@ -8,9 +8,11 @@ import argparse
 import json
 import os
 import sys
-from typing import List, Dict, Tuple
+from typing import Dict, List, Tuple
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+import warnings
 
 import cv2
 import numpy as np
@@ -19,12 +21,12 @@ import torch
 from matplotlib import pyplot as plt
 from tqdm import tqdm
 
-from src.inference import GazePipeline3D, GazePipeline2D, Mapper
+from src.inference import GazePipeline2D, GazePipeline3D, Mapper
 
-import warnings
 warnings.filterwarnings(
     "ignore", category=UserWarning, module="google.protobuf.symbol_database"
 )
+
 
 def process_video_for_features(video_path: str, pipeline: GazePipeline3D) -> List[Dict]:
     """
@@ -57,9 +59,7 @@ def process_video_for_features(video_path: str, pipeline: GazePipeline3D) -> Lis
 
             # Use the first detected person's data
             if results_3d:
-                all_frame_features.append(
-                    {"frame_idx": frame_idx, **results_3d[0]}
-                )
+                all_frame_features.append({"frame_idx": frame_idx, **results_3d[0]})
 
             frame_idx += 1
             pbar.update(1)
@@ -69,50 +69,47 @@ def process_video_for_features(video_path: str, pipeline: GazePipeline3D) -> Lis
 
 
 def prepare_calibration_data(
+    mapper: Mapper,
+    pipeline_2d: GazePipeline2D,
     all_frame_features: List[Dict],
     click_data_path: str,
     fps: float,
-    mapper: Mapper,
     frame_window: int = 5,
 ):
     """
-    Populates the Mapper object with calibration data using a fixed frame window.
-
-    Args:
-        all_frame_features: List of features extracted from every video frame.
-        click_data_path: Path to the JSON file with click data.
-        fps: Frames per second of the video.
-        mapper: The Mapper instance to be populated.
-        frame_window: Number of frames to take before and after the click frame.
+    Populates the Mapper by extracting configured features from the 3D pipeline results.
     """
     with open(click_data_path, "r") as f:
         click_data = json.load(f)
 
-    # Create a quick lookup map from frame_idx to gaze vector
-    features_by_frame = {f["frame_idx"]: f["gaze"] for f in all_frame_features}
-
+    features_by_frame = {f["frame_idx"]: f for f in all_frame_features}
     total_points = 0
+
     for click_event in click_data:
         click_time_sec = click_event["timestamp"] / 1000
         click_frame = int(click_time_sec * fps)
+        start_frame, end_frame = click_frame - frame_window, click_frame + frame_window
 
-        start_frame = click_frame - frame_window
-        end_frame = click_frame + frame_window
-
-        gaze_vectors_for_point = []
+        vectors_for_point = []
         for i in range(start_frame, end_frame + 1):
             if i in features_by_frame:
-                gaze = features_by_frame[i]
-                gaze_vectors_for_point.append([gaze["pitch"], gaze["yaw"]]) # passing pitch & yaw directly
+                try:
+                    # Use the pipeline's public utility to ensure consistency
+                    feature_vector = pipeline_2d.extract_feature_vector(
+                        features_by_frame[i]
+                    )
+                    vectors_for_point.append(feature_vector)
+                except ValueError:
+                    pass  # Skip frames with missing features
 
-        if not gaze_vectors_for_point:
+        if not vectors_for_point:
             continue
 
         target_coords = (
             click_event["coordinates"]["x"],
             click_event["coordinates"]["y"],
         )
-        mapper.add_calibration_point(gaze_vectors_for_point, target_coords)
+        mapper.add_calibration_point(vectors_for_point, target_coords)
         total_points += 1
 
     print(f"Populated mapper with data from {total_points} calibration points.")
@@ -185,27 +182,39 @@ def analyze_and_plot_results(results_df: pd.DataFrame, output_dir: str):
     print(f"\n{stats_string}\n")
 
     stats_path = os.path.join(output_dir, "stats.txt")
-    with open(stats_path, 'w') as f:
+    with open(stats_path, "w") as f:
         f.write(stats_string)
     print(f"Summary statistics saved to: {stats_path}")
 
     # --- Generate Plot ---
     num_points = len(results_df)
-    colors = plt.get_cmap('viridis')(np.linspace(0, 1, num_points))
+    colors = plt.get_cmap("viridis")(np.linspace(0, 1, num_points))
 
     plt.style.use("seaborn-v0_8-whitegrid")
     plt.figure(figsize=(12, 8))
 
     # Plot ground truth points
     plt.scatter(
-        results_df["gt_x"], results_df["gt_y"], c=colors, label="Ground Truth",
-        s=100, marker="o", alpha=0.8, edgecolors='black', linewidth=0.5
+        results_df["gt_x"],
+        results_df["gt_y"],
+        c=colors,
+        label="Ground Truth",
+        s=100,
+        marker="o",
+        alpha=0.8,
+        edgecolors="black",
+        linewidth=0.5,
     )
 
     # Plot predicted points
     plt.scatter(
-        results_df["pred_x"], results_df["pred_y"], c=colors, label="Prediction",
-        s=80, marker="x", alpha=0.8
+        results_df["pred_x"],
+        results_df["pred_y"],
+        c=colors,
+        label="Prediction",
+        s=80,
+        marker="x",
+        alpha=0.8,
     )
 
     # This avoids using the DataFrame index 'i' which caused the type error.
@@ -219,8 +228,8 @@ def analyze_and_plot_results(results_df: pd.DataFrame, output_dir: str):
         )
 
     # Plot styling
-    all_x = pd.concat([results_df['gt_x'], results_df['pred_x']])
-    all_y = pd.concat([results_df['gt_y'], results_df['pred_y']])
+    all_x = pd.concat([results_df["gt_x"], results_df["pred_x"]])
+    all_y = pd.concat([results_df["gt_y"], results_df["pred_y"]])
     plt.xlim(0, all_x.max() * 1.05)
     plt.ylim(0, all_y.max() * 1.05)
     plt.gca().invert_yaxis()
@@ -245,6 +254,7 @@ def get_video_fps(video_path: str) -> float:
     cap.release()
     return fps
 
+
 def main(args):
     pipeline_3d = GazePipeline3D(
         weights_path=args.weights,
@@ -252,17 +262,25 @@ def main(args):
         smooth_facebbox=True,
         smooth_gaze=True,
     )
+    mapper = Mapper()
+    pipeline_2d = GazePipeline2D(
+        pipeline_3d=pipeline_3d, mapper=mapper, feature_keys=["pitch", "yaw"]
+    )
 
     # Calibration Phase
-    print("\n--- Step 1: Processing Calibration Data & Training Mapper ---")
+    print("\n--- Preparing Calibration Data ---")
     calib_fps = get_video_fps(args.calib_video)
     calib_features = process_video_for_features(args.calib_video, pipeline_3d)
 
-    mapper = Mapper()
     # Populate the mapper with training data
-    prepare_calibration_data(calib_features, args.calib_json, calib_fps, mapper)
+    prepare_calibration_data(
+        mapper=mapper,
+        pipeline_2d=pipeline_2d,
+        all_frame_features=calib_features,
+        click_data_path=args.calib_json,
+        fps=calib_fps,
+    )
 
-    # Train the mapper
     try:
         score_x, score_y = mapper.train()
         print(f"Mapper trained. R² scores -> X: {score_x:.3f}, Y: {score_y:.3f}")
@@ -271,13 +289,9 @@ def main(args):
         return
 
     # Evaluation Phase
-    print("\n--- Step 2: Evaluating on Test Data (Production Workflow) ---")
+    print("\n--- Evaluating on Test Data ---")
     test_fps = get_video_fps(args.test_video)
-
-    # Get the list of frames we need to test and their corresponding ground truth labels
     test_frame_indices, y_test = prepare_test_data(args.test_json, test_fps)
-
-    pipeline_2d = GazePipeline2D(pipeline_3d, mapper)
 
     cap = cv2.VideoCapture(args.test_video)
     if not cap.isOpened():
@@ -288,7 +302,9 @@ def main(args):
     current_frame = 0
     predictions: List[Tuple[float, float] | None] = [None] * len(y_test)
 
-    print(f"Running end-to-end pipeline on {len(frame_target_map)} specific test frames...")
+    print(
+        f"Running end-to-end pipeline on {len(frame_target_map)} specific test frames..."
+    )
     with tqdm(total=int(cap.get(cv2.CAP_PROP_FRAME_COUNT)), unit="frames") as pbar:
         while cap.isOpened():
             ret, frame = cap.read()
@@ -319,11 +335,15 @@ def main(args):
         pred_x, pred_y = prediction
         gt_x, gt_y = y_test[i]
         error = np.sqrt((pred_x - gt_x) ** 2 + (pred_y - gt_y) ** 2)
-        results.append({
-            "gt_x": gt_x, "gt_y": gt_y,
-            "pred_x": pred_x, "pred_y": pred_y,
-            "error": error
-        })
+        results.append(
+            {
+                "gt_x": gt_x,
+                "gt_y": gt_y,
+                "pred_x": pred_x,
+                "pred_y": pred_y,
+                "error": error,
+            }
+        )
     results_df = pd.DataFrame(results)
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -335,13 +355,22 @@ if __name__ == "__main__":
         description="Run a streamlined gaze estimation experiment."
     )
     parser.add_argument(
-        "--weights", required=True, type=str, help="Path to the 3D gaze model weights (.pth file)."
+        "--weights",
+        required=True,
+        type=str,
+        help="Path to the 3D gaze model weights (.pth file).",
     )
     parser.add_argument(
-        "--calib-video", required=True, type=str, help="Path to the calibration video file."
+        "--calib-video",
+        required=True,
+        type=str,
+        help="Path to the calibration video file.",
     )
     parser.add_argument(
-        "--calib-json", required=True, type=str, help="Path to the calibration JSON file."
+        "--calib-json",
+        required=True,
+        type=str,
+        help="Path to the calibration JSON file.",
     )
     parser.add_argument(
         "--test-video", required=True, type=str, help="Path to the test video file."

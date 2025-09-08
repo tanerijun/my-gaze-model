@@ -32,7 +32,11 @@ class CalibrationDemo:
     def __init__(self, pipeline_3d: GazePipeline3D):
         self.pipeline_3d = pipeline_3d
         self.mapper = Mapper()
-        self.pipeline_2d = None  # Will be created after calibration
+        self.pipeline_2d = GazePipeline2D(
+            pipeline_3d=self.pipeline_3d,
+            mapper=self.mapper,
+            feature_keys=["pitch", "yaw"],
+        )
 
         # Calibration state
         self.calibration_points = self._generate_calibration_grid()
@@ -42,7 +46,7 @@ class CalibrationDemo:
         self.point_duration = 2  # seconds
 
         # Current point data collection
-        self.current_point_gaze_vectors = []
+        self.current_point_feature_vectors = []
 
         self.waiting_for_next = False  # for pausing during calibration
         self.show_3d_arrow = False  # toggle showing 3D arrow (just like 3D demo)
@@ -84,7 +88,7 @@ class CalibrationDemo:
         self.calibrating = True
         self.current_point_idx = 0
         self.point_start_time = time.time()
-        self.current_point_gaze_vectors = []
+        self.current_point_feature_vectors = []
         print("Starting calibration...")
 
     def calibration_step(self, frame: np.ndarray) -> np.ndarray:
@@ -142,23 +146,30 @@ class CalibrationDemo:
 
         # Collect gaze data during point display
         if elapsed < self.point_duration:
-            results = self.pipeline_3d(frame)
-            if results:
-                # Use first detected face
-                gaze = results[0]["gaze"]
-                self.current_point_gaze_vectors.append([gaze["pitch"], gaze["yaw"]])
+            results_3d = self.pipeline_3d(frame)
+            if results_3d:
+                try:
+                    # Use the public method to get the correctly configured feature vector
+                    feature_vector = self.pipeline_2d.extract_feature_vector(
+                        results_3d[0]
+                    )
+                    self.current_point_feature_vectors.append(feature_vector)
+                except ValueError:
+                    # This can happen if a face is detected but a feature is missing
+                    # for a brief moment. It's safe to just skip that frame.
+                    pass
         else:
             # Point duration complete - save data and wait for user
-            if self.current_point_gaze_vectors:
+            if self.current_point_feature_vectors:
                 # Select middle 11 frames
-                n = len(self.current_point_gaze_vectors)
+                n = len(self.current_point_feature_vectors)
                 if n > 11:
                     start = (n - 11) // 2
-                    selected_vectors = self.current_point_gaze_vectors[
+                    selected_vectors = self.current_point_feature_vectors[
                         start : start + 11
                     ]
                 else:
-                    selected_vectors = self.current_point_gaze_vectors
+                    selected_vectors = self.current_point_feature_vectors
 
                 self.mapper.add_calibration_point(selected_vectors, (point_x, point_y))
                 print(
@@ -185,7 +196,7 @@ class CalibrationDemo:
         """Advance to next calibration point after user presses key."""
         self.current_point_idx += 1
         self.point_start_time = time.time()
-        self.current_point_gaze_vectors = []
+        self.current_point_feature_vectors = []
         self.waiting_for_next = False
 
     def _train_mapper(self):
@@ -193,14 +204,9 @@ class CalibrationDemo:
         try:
             score_x, score_y = self.mapper.train()
             stats = self.mapper.get_training_stats()
-
             print(f"Mapper trained with {stats['num_samples']} samples")
             print(f"X mapper R² score: {score_x:.3f}")
             print(f"Y mapper R² score: {score_y:.3f}")
-
-            # Create 2D pipeline
-            self.pipeline_2d = GazePipeline2D(self.pipeline_3d, self.mapper)
-
         except Exception as e:
             print(f"Training failed: {e}")
 
@@ -211,7 +217,7 @@ class CalibrationDemo:
         Returns:
             Tuple[np.ndarray, bool]: (processed_frame, pog_detected)
         """
-        if self.pipeline_2d is None:
+        if not self.pipeline_2d.is_calibrated:
             return frame, False
 
         results = self.pipeline_2d.predict(frame)

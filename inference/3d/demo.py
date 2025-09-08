@@ -19,99 +19,169 @@ import argparse
 import queue
 import threading
 import time
-from typing import Tuple
 
 import cv2
 import numpy as np
+from mediapipe.python.solutions import face_mesh_connections
 
 from src import GazePipeline3D
 
 
-def draw_gaze(
-    image: np.ndarray,
-    bbox: Tuple[int, int, int, int],
-    pitch: float,
-    yaw: float,
-    color: Tuple[int, int, int] = (0, 0, 255),
-) -> np.ndarray:
-    """
-    Draw gaze vector on the image.
+def draw_bbox_and_gaze(frame: np.ndarray, result: dict):
+    """Draws the gaze vector using the ORIGINAL, PROVEN mathematical formula."""
+    if "bbox" not in result or "gaze" not in result:
+        return
 
-    Args:
-        image: Input image
-        bbox: Bounding box (x1, y1, x2, y2)
-        pitch: Pitch angle in degrees
-        yaw: Yaw angle in degrees
-        color: Arrow color in BGR format
+    bbox = result["bbox"]
+    gaze = result["gaze"]
 
-    Returns:
-        Image with gaze vector drawn
-    """
+    # Draw bounding box
+    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+
     x1, y1, x2, y2 = bbox
     center_x = int((x1 + x2) / 2)
     center_y = int((y1 + y2) / 2)
 
-    # Convert degrees to radians
-    pitch_rad = np.radians(pitch)
-    yaw_rad = np.radians(yaw)
+    pitch_rad = np.radians(gaze["pitch"])
+    yaw_rad = np.radians(gaze["yaw"])
+    length = 150
 
-    # Calculate gaze vector endpoint
-    length = 150  # Length of the gaze vector
     dx = -length * np.sin(pitch_rad) * np.cos(yaw_rad)
     dy = -length * np.sin(yaw_rad)
 
     end_point = (int(center_x + dx), int(center_y + dy))
 
-    # Draw the gaze vector
-    cv2.arrowedLine(image, (center_x, center_y), end_point, color, 2, tipLength=0.2)
-
-    return image
-
-
-def draw_head_pose_axis(
-    image: np.ndarray,
-    landmarks: list,  # Takes landmarks now
-    rotation_vector: np.ndarray,
-    translation_vector: np.ndarray,
-    cam_matrix: np.ndarray,
-    dist_coeffs: np.ndarray,
-) -> np.ndarray:
-    """
-    Draw the 3D head pose axis (roll, pitch, yaw) on the image.
-
-    Args:
-        image: The input frame.
-        landmarks: The list of landmark objects from MediaPipe.
-        rotation_vector: The rotation vector from the head pose.
-        translation_vector: The translation vector from the head pose.
-        cam_matrix: The camera intrinsic matrix.
-        dist_coeffs: The camera distortion coefficients.
-
-    Returns:
-        The image with the 3D axis drawn.
-    """
-    # Define the 3D points for the axis tips.
-    axis_points = np.array([[75, 0, 0], [0, -75, 0], [0, 0, 75]], dtype=np.float32)
-
-    # Project the 3D axis tips onto the 2D image plane.
-    imgpts, _ = cv2.projectPoints(
-        axis_points, rotation_vector, translation_vector, cam_matrix, dist_coeffs
+    cv2.arrowedLine(
+        frame, (center_x, center_y), end_point, (0, 0, 255), 2, tipLength=0.2
     )
 
-    # Use Landmark #1 (nose bridge) as the consistent origin point
-    frame_h, frame_w, _ = image.shape
-    origin_landmark = landmarks[1]
-    origin = (int(origin_landmark.x * frame_w), int(origin_landmark.y * frame_h))
 
-    # Convert projected points to integer coordinates.
+def draw_head_pose(frame: np.ndarray, result: dict, cam_matrix: np.ndarray):
+    """Draws the 3D head pose axis."""
+    if (
+        "head_pose_matrix" not in result
+        or result["head_pose_matrix"] is None
+        or "mediapipe_landmarks" not in result
+        or result["mediapipe_landmarks"] is None
+    ):
+        # We need both the matrix for direction and landmarks for origin
+        return
+
+    h, w, _ = frame.shape
+    head_pose_matrix = result["head_pose_matrix"]
+    landmarks = result["mediapipe_landmarks"]
+
+    # Project 3D axes points to 2D
+    axis_points = np.array([[50, 0, 0], [0, -50, 0], [0, 0, 50]], dtype=np.float32)
+    rotation_matrix = head_pose_matrix[:3, :3]
+    rotation_vector, _ = cv2.Rodrigues(rotation_matrix)
+    translation_vector = head_pose_matrix[:3, 3]
+    rotation_vector[0] *= -1
+
+    imgpts, _ = cv2.projectPoints(
+        axis_points,
+        rotation_vector,
+        translation_vector,
+        cam_matrix,
+        np.zeros((4, 1)),
+    )
     imgpts = np.int32(imgpts).reshape(-1, 2)
 
-    # Draw the axes lines on the image.
-    cv2.line(image, origin, tuple(imgpts[0]), (0, 0, 255), 3)  # X-axis: Red
-    cv2.line(image, origin, tuple(imgpts[1]), (0, 255, 0), 3)  # Y-axis: Green
-    cv2.line(image, origin, tuple(imgpts[2]), (255, 0, 0), 3)  # Z-axis: Blue
+    # Use nose tip (landmark #1) as the origin for the axes
+    origin = (int(landmarks[1].x * w), int(landmarks[1].y * h))
 
-    return image
+    cv2.line(frame, origin, tuple(imgpts[0]), (0, 0, 255), 3)  # X-axis: Red
+    cv2.line(frame, origin, tuple(imgpts[1]), (0, 255, 0), 3)  # Y-axis: Green
+    cv2.line(frame, origin, tuple(imgpts[2]), (255, 0, 0), 3)  # Z-axis: Blue
+
+
+def draw_blaze_keypoints(frame: np.ndarray, result: dict):
+    """Draws the 6 keypoints from the BlazeFace detector."""
+    if "blaze_keypoints" not in result or result["blaze_keypoints"] is None:
+        return
+
+    h, w, _ = frame.shape
+    for kp in result["blaze_keypoints"]:
+        center = (int(kp.x * w), int(kp.y * h))
+        cv2.circle(frame, center, 2, (255, 255, 0), -1)  # Cyan dots
+
+
+def draw_mediapipe_mesh(frame: np.ndarray, result: dict):
+    """Draws the full 478-point face mesh from MediaPipe landmarks."""
+    if "mediapipe_landmarks" not in result or result["mediapipe_landmarks"] is None:
+        return
+
+    landmarks = result["mediapipe_landmarks"]
+    h, w, _ = frame.shape
+
+    # Define the drawing spec for the mesh connections
+    connection_spec = {"color": (224, 224, 224), "thickness": 1}
+
+    # FACEMESH_TESSELATION is a set of (start_index, end_index) tuples
+    for connection in face_mesh_connections.FACEMESH_TESSELATION:
+        start_idx = connection[0]
+        end_idx = connection[1]
+
+        start_point = landmarks[start_idx]
+        end_point = landmarks[end_idx]
+
+        # Denormalize coordinates to get pixel values
+        start_pixel = (int(start_point.x * w), int(start_point.y * h))
+        end_pixel = (int(end_point.x * w), int(end_point.y * h))
+
+        # Draw the line on the frame
+        cv2.line(
+            frame,
+            start_pixel,
+            end_pixel,
+            connection_spec["color"],
+            connection_spec["thickness"],
+        )
+
+    # OPTIONAL: Draw the individual landmark points
+    point_spec = {"color": (0, 255, 0), "thickness": -1, "radius": 1}
+    for landmark in landmarks:
+        x_px = int(landmark.x * w)
+        y_px = int(landmark.y * h)
+        cv2.circle(
+            frame,
+            (x_px, y_px),
+            point_spec["radius"],
+            point_spec["color"],
+            point_spec["thickness"],
+        )
+
+
+def draw_gaze_origin(frame: np.ndarray, result: dict, text_buffer: list):
+    """Draws graphical elements and adds text info to a buffer for deferred rendering."""
+    if "gaze_origin_features" not in result or "blaze_keypoints" not in result:
+        return
+
+    h, w, _ = frame.shape
+    features, keypoints = result["gaze_origin_features"], result["blaze_keypoints"]
+
+    # Draw graphical elements that need to be flipped
+    right_eye = (int(keypoints[0].x * w), int(keypoints[0].y * h))
+    left_eye = (int(keypoints[1].x * w), int(keypoints[1].y * h))
+    cv2.circle(frame, right_eye, 3, (255, 0, 255), -1)
+    cv2.circle(frame, left_eye, 3, (255, 0, 255), -1)
+    cv2.line(frame, right_eye, left_eye, (255, 0, 255), 1)
+
+    # Prepare text and its position on the UN-FLIPPED frame
+    text = f"IPD: {features['ipd']:.2f}, Roll: {features['roll_angle']:.1f}"
+    pos = (result["bbox"][0], result["bbox"][1] - 10)
+
+    # Add all info needed for rendering to the buffer
+    text_buffer.append(
+        {
+            "text": text,
+            "pos": pos,
+            "font": cv2.FONT_HERSHEY_SIMPLEX,
+            "scale": 0.5,
+            "color": (255, 255, 255),
+            "thickness": 1,
+        }
+    )
 
 
 class FrameProducer:
@@ -171,50 +241,35 @@ class FrameProducer:
             self.cap = None
 
 
-def run_demo(
-    weights_path: str,
-    source: str = "0",
-    device: str = "auto",
-    smooth_facebbox: bool = False,
-    smooth_gaze: bool = False,
-):
+def run_demo(args):
     """
     Run the gaze estimation demo.
-
-    Args:
-        weights_path: Path to the trained model weights
-        source: Video source (webcam index or video file path)
-        device: Compute device ("cpu", "cuda", or "auto")
-        smooth_gaze: Enable Kalman filtering for face bbox
-        smooth_gaze: Enable Kalman filtering for gaze vectors
     """
-    print("Initializing gaze estimation pipeline...")
+    use_landmarker = args.show_head_pose or args.show_mediapipe_mesh
+    if use_landmarker:
+        print("Enabling MediaPipe FaceLandmarker for requested visualizations.")
+
     pipeline = GazePipeline3D(
-        weights_path,
-        device=device,
-        smooth_facebbox=smooth_facebbox,
-        smooth_gaze=smooth_gaze,
-        enable_landmarker_features=False,
+        args.weights,
+        device=args.device,
+        smooth_facebbox=args.smooth_facebbox,
+        smooth_gaze=args.smooth_gaze,
+        enable_landmarker_features=use_landmarker,
     )
 
-    print("Setting up video capture...")
-    frame_producer = FrameProducer(source)
-
-    is_webcam = source.isdigit()
-
+    frame_producer = FrameProducer(args.source)
+    is_webcam = args.source.isdigit()
     # Camera intrinsics
     cam_matrix = None
-    dist_coeffs = np.zeros((4, 1))
 
     try:
         frame_producer.start()
-        print(f"Started video capture from: {source}")
+        print(f"Started video capture from: {args.source}")
         print("Press 'q' to quit, 'r' to reset tracking")
 
         while True:
             start_time = time.time()
 
-            # Get next frame
             frame = frame_producer.get_frame()
             if frame is None:
                 continue
@@ -227,55 +282,49 @@ def run_demo(
                     [[w, 0, w / 2], [0, w, h / 2], [0, 0, 1]], dtype=np.float32
                 )
 
-            # Process frame for gaze estimation
             results = pipeline(frame)
-
-            # Draw results
+            text_buffer = []
             for result in results:
-                bbox = result["bbox"]
-                gaze = result["gaze"]
+                draw_bbox_and_gaze(frame, result)
 
-                # Draw bounding box
-                cv2.rectangle(
-                    frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2
-                )
+                if args.show_head_pose:
+                    draw_head_pose(frame, result, cam_matrix)
 
-                # Draw gaze vector
-                frame = draw_gaze(frame, bbox, gaze["pitch"], gaze["yaw"])
+                if args.show_blaze_keypoints:
+                    draw_blaze_keypoints(frame, result)
 
-                head_pose_matrix = result.get("head_pose_matrix")
-                landmarks = result.get("landmarks")
-                if head_pose_matrix is not None and landmarks is not None:
-                    rotation_matrix = head_pose_matrix[:3, :3]
-                    rotation_vector, _ = cv2.Rodrigues(rotation_matrix)
-                    translation_vector = head_pose_matrix[:3, 3]
+                if args.show_mediapipe_mesh:
+                    draw_mediapipe_mesh(frame, result)
 
-                    # This aligns MediaPipe's (+Y UP) with OpenCV's (+Y DOWN)
-                    rotation_vector[0] *= -1
+                if args.show_gaze_origin:
+                    draw_gaze_origin(frame, result, text_buffer)
 
-                    frame = draw_head_pose_axis(
-                        frame,
-                        landmarks,
-                        rotation_vector,
-                        translation_vector,
-                        cam_matrix,
-                        dist_coeffs,
-                    )
+            # Calculate and display FPS
+            fps = 1.0 / (time.time() - start_time)
+            text_buffer.append(
+                {
+                    "text": f"FPS: {fps:.1f}",
+                    "pos": (10, 30),
+                    "font": cv2.FONT_HERSHEY_SIMPLEX,
+                    "scale": 1,
+                    "color": (0, 255, 0),
+                    "thickness": 2,
+                }
+            )
 
             if is_webcam:
                 frame = cv2.flip(frame, 1)
 
-            # Calculate and display FPS
-            fps = 1.0 / (time.time() - start_time)
-            cv2.putText(
-                frame,
-                f"FPS: {fps:.1f}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                1,
-                (0, 255, 0),
-                2,
-            )
+            for text_info in text_buffer:
+                cv2.putText(
+                    frame,
+                    text_info["text"],
+                    text_info["pos"],
+                    text_info["font"],
+                    text_info["scale"],
+                    text_info["color"],
+                    text_info["thickness"],
+                )
 
             # Display frame
             cv2.imshow("Gaze Estimation Demo", frame)
@@ -299,67 +348,53 @@ def run_demo(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Real-time gaze estimation demo",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python demo.py --weights model.pth                     # Use default webcam
-  python demo.py --weights model.pth --source 1          # Use webcam index 1
-  python demo.py --weights model.pth --source video.mp4  # Use video file
-  python demo.py --weights model.pth --device cpu        # Force CPU inference
-  python demo.py --weights model.pth --smooth-gaze       # Enable gaze smoothing
-        """,
-    )
+    parser = argparse.ArgumentParser(description="Real-time 3D gaze estimation demo.")
 
     parser.add_argument(
-        "--weights",
-        type=str,
-        required=True,
-        help="Path to the trained model weights (.pth file)",
+        "--weights", type=str, required=True, help="Path to model weights."
     )
-
     parser.add_argument(
         "--source",
         type=str,
         default="0",
-        help="Video source: webcam index (0, 1, ...) or path to video file",
+        help="Video source (webcam index or file path).",
     )
-
     parser.add_argument(
-        "--device",
-        type=str,
-        default="auto",
-        choices=["auto", "cpu", "cuda"],
-        help="Compute device for inference",
+        "--device", type=str, default="auto", choices=["auto", "cpu", "cuda"]
     )
 
     parser.add_argument(
         "--smooth-facebbox",
         action="store_true",
-        help="Enable Kalman filtering for face bbox (smoother but less responsive)",
+        help="Enable Kalman filtering for face bbox.",
     )
-
     parser.add_argument(
         "--smooth-gaze",
         action="store_true",
-        help="Enable Kalman filtering for gaze vectors (smoother but less responsive)",
+        help="Enable Kalman filtering for gaze vectors.",
+    )
+
+    parser.add_argument(
+        "--show-head-pose", action="store_true", help="Visualize the 3D head pose axis."
+    )
+    parser.add_argument(
+        "--show-blaze-keypoints",
+        action="store_true",
+        help="Visualize the 6 BlazeFace keypoints.",
+    )
+    parser.add_argument(
+        "--show-mediapipe-mesh",
+        action="store_true",
+        help="Visualize the full MediaPipe face mesh.",
+    )
+    parser.add_argument(
+        "--show-gaze-origin",
+        action="store_true",
+        help="Visualize the gaze origin features (eye centers, Inter-Pupillary Distance, Roll).",
     )
 
     args = parser.parse_args()
-
-    print("=" * 50)
-    print("Gaze Estimation Demo")
-    print("=" * 50)
-    print(f"Model weights: {args.weights}")
-    print(f"Video source: {args.source}")
-    print(f"Device: {args.device}")
-    print(f"Gaze smoothing: {args.smooth_gaze}")
-    print("=" * 50)
-
-    run_demo(
-        args.weights, args.source, args.device, args.smooth_facebbox, args.smooth_gaze
-    )
+    run_demo(args)
 
 
 if __name__ == "__main__":

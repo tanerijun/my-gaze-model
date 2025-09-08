@@ -1,3 +1,4 @@
+import math
 import os
 
 import cv2
@@ -171,11 +172,13 @@ class GazePipeline3D:
             ```
             - `bbox`: The smoothed bounding box (x1, y1, x2, y2) of the face.
             - `gaze`: A dictionary with "pitch" and "yaw" keys in degrees.
+            - `gaze_origin_features`: Dict[str, float],
             - `head_pose_matrix`: A 4x4 NumPy array representing the 3D head
                 transformation matrix. Is `None` if `enable_landmarker_features` is False.
             - `landmarks`: A list of MediaPipe NormalizedLandmark objects. Is `None`
                 if `enable_landmarker_features` is False.
         """
+        h, w, _ = frame.shape
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         detection_result = self.face_detector.detect(mp_image)
@@ -183,21 +186,21 @@ class GazePipeline3D:
         if not detections:
             return []
 
-        face_crops, bboxes = self._extract_face_crops_detector(frame, detections)
+        face_crops, bboxes, keypoints_list = self._extract_face_crops_detector(
+            frame, detections
+        )
         if not face_crops:
             return []
 
-        head_pose, landmarks = None, None
+        head_pose, mediapipe_landmarks = None, None
         if self.enable_landmarker_features and self.face_landmarker:
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
             landmarker_result = self.face_landmarker.detect(mp_image)
-
             if landmarker_result.facial_transformation_matrixes:
                 head_pose = landmarker_result.facial_transformation_matrixes[0]
-                landmarks = landmarker_result.face_landmarks[0]
+                # Ensure we have landmarks before trying to access them
+                if landmarker_result.face_landmarks:
+                    mediapipe_landmarks = landmarker_result.face_landmarks[0]
 
-        # Batch process faces through gaze model
         face_batch = batch_preprocess_faces(face_crops, self.image_size)
         if face_batch.size(0) == 0:
             return []
@@ -208,11 +211,12 @@ class GazePipeline3D:
 
         # Package results
         results = []
-        for i, bbox in enumerate(bboxes):
+        for i, (bbox, keypoints) in enumerate(zip(bboxes, keypoints_list)):
             # Apply gaze smoothing
             pitch = float(decoded_preds[i][0])
             yaw = float(decoded_preds[i][1])
             smoothed_pitch, smoothed_yaw = self.gaze_tracker.update(pitch, yaw)
+            origin_features = self._calculate_gaze_origin_features(keypoints, w, h)
 
             results.append(
                 {
@@ -221,8 +225,10 @@ class GazePipeline3D:
                         "pitch": smoothed_pitch,
                         "yaw": smoothed_yaw,
                     },
+                    "gaze_origin_features": origin_features,
+                    "blaze_keypoints": keypoints,
                     "head_pose_matrix": head_pose,
-                    "landmarks": landmarks,
+                    "mediapipe_landmarks": mediapipe_landmarks,
                 }
             )
 
@@ -230,9 +236,11 @@ class GazePipeline3D:
 
     def _extract_face_crops_detector(self, frame, detections):
         h, w, _ = frame.shape
-        face_crops, bboxes = [], []
+        face_crops, bboxes, keypoints_list = [], [], []
 
         for detection in detections:
+            keypoints_list.append(detection.keypoints)
+
             bbox = detection.bounding_box
 
             # Ensure bbox is within frame boundaries
@@ -256,7 +264,50 @@ class GazePipeline3D:
                 face_crops.append(crop)
                 bboxes.append((sx1, sy1, sx2, sy2))
 
-        return face_crops, bboxes
+        return face_crops, bboxes, keypoints_list
+
+    def _calculate_gaze_origin_features(self, keypoints, frame_w, frame_h):
+        """
+        Calculates gaze origin features from BlazeFace keypoints.
+
+        Keypoint indices for BlazeFace:
+        0: Right Eye
+        1: Left Eye
+        """
+        if len(keypoints) < 2:
+            return {
+                "eye_center_x": 0.0,
+                "eye_center_y": 0.0,
+                "ipd": 0.0,
+                "roll_angle": 0.0,
+            }
+
+        # De-normalize keypoints
+        right_eye = (keypoints[0].x * frame_w, keypoints[0].y * frame_h)
+        left_eye = (keypoints[1].x * frame_w, keypoints[1].y * frame_h)
+
+        # Eye Center (normalized by frame dimensions for consistency)
+        eye_center_x = ((left_eye[0] + right_eye[0]) / 2.0) / frame_w
+        eye_center_y = ((left_eye[1] + right_eye[1]) / 2.0) / frame_h
+
+        # Inter-pupillary distance (IPD) as a proxy for Z-depth
+        ipd = math.sqrt(
+            (left_eye[0] - right_eye[0]) ** 2 + (left_eye[1] - right_eye[1]) ** 2
+        )
+        # Normalize by frame width
+        normalized_ipd = ipd / frame_w
+
+        # Head Roll Angle
+        dx = right_eye[0] - left_eye[0]
+        dy = right_eye[1] - left_eye[1]
+        roll_angle = math.degrees(math.atan2(dy, dx))
+
+        return {
+            "eye_center_x": eye_center_x,
+            "eye_center_y": eye_center_y,
+            "ipd": normalized_ipd,
+            "roll_angle": roll_angle,
+        }
 
     def _get_bbox_from_landmarks(self, landmarks, frame_shape, margin=0.1):
         """Derive bounding box from landmarks"""
