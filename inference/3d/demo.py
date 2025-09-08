@@ -169,16 +169,22 @@ def draw_gaze_origin(frame: np.ndarray, result: dict, text_buffer: list):
 
     # Prepare text and its position on the UN-FLIPPED frame
     text = f"IPD: {features['ipd']:.2f}, Roll: {features['roll_angle']:.1f}"
-    pos = (result["bbox"][0], result["bbox"][1] - 10)
+
+    # Base position is relative to the top-left of the raw bbox
+    pos_x = result["bbox"][0]
+    pos_y = result["bbox"][1] - 10
+
+    # To account for image flip
+    pos_x = w - result["bbox"][2]
 
     # Add all info needed for rendering to the buffer
     text_buffer.append(
         {
             "text": text,
-            "pos": pos,
+            "pos": (pos_x, pos_y),
             "font": cv2.FONT_HERSHEY_SIMPLEX,
             "scale": 0.5,
-            "color": (255, 0, 0),
+            "color": (0, 255, 0),
             "thickness": 1,
         }
     )
