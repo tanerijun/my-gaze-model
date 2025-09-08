@@ -327,8 +327,8 @@ class GazePipeline3D:
         normalized_ipd = ipd / frame_w
 
         # Head Roll Angle
-        dx = right_eye[0] - left_eye[0]
-        dy = right_eye[1] - left_eye[1]
+        dx = left_eye[0] - right_eye[0]
+        dy = left_eye[1] - right_eye[1]
         roll_angle = math.degrees(math.atan2(dy, dx))
 
         return {
