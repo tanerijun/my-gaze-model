@@ -178,7 +178,7 @@ def draw_gaze_origin(frame: np.ndarray, result: dict, text_buffer: list):
             "pos": pos,
             "font": cv2.FONT_HERSHEY_SIMPLEX,
             "scale": 0.5,
-            "color": (255, 255, 255),
+            "color": (255, 0, 0),
             "thickness": 1,
         }
     )

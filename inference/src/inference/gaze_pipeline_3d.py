@@ -9,7 +9,13 @@ from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
 from ..models import GazeModel
-from ..utils import GazeKalmanTracker, KalmanBoxTracker, batch_preprocess_faces
+from ..utils import FaceKalmanTracker, GazeKalmanTracker, batch_preprocess_faces
+
+
+class SmoothedKeypoint:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
 
 
 class GazePipeline3D:
@@ -30,7 +36,7 @@ class GazePipeline3D:
             device: Device to run inference on ("cpu", "cuda", or "auto")
             image_size: Input image size for the model (default 224 to match training)
             enable_landmarker_features: If True, runs FaceLandmarker to get head pose and landmarks (default false for speed) (assume only 1 face)
-            smooth_facebbox: Enable Kalman filtering for face bounding box (default false)
+            smooth_facebbox: Enable Kalman filtering for face bounding box and keypoints (default false)
             smooth_gaze: Enable Kalman filtering for gaze vectors (default False)
         """
         self.image_size = image_size
@@ -54,7 +60,7 @@ class GazePipeline3D:
         # JIT compile for faster inference
         self._compile_model()
 
-        self.bbox_tracker = KalmanBoxTracker(enabled=smooth_facebbox)
+        self.face_tracker = FaceKalmanTracker(enabled=smooth_facebbox)
         if smooth_facebbox:
             print("Face bounding box smoothing ENABLED.")
         else:
@@ -236,21 +242,34 @@ class GazePipeline3D:
 
     def _extract_face_crops_detector(self, frame, detections):
         h, w, _ = frame.shape
-        face_crops, bboxes, keypoints_list = [], [], []
+        face_crops, final_bboxes, final_keypoints = [], [], []
 
         for detection in detections:
-            keypoints_list.append(detection.keypoints)
-
+            # Extract BBox
             bbox = detection.bounding_box
-
-            # Ensure bbox is within frame boundaries
             x1 = max(0, bbox.origin_x)
             y1 = max(0, bbox.origin_y)
             x2 = min(w, bbox.origin_x + bbox.width)
             y2 = min(h, bbox.origin_y + bbox.height)
+            bbox_coords = [x1, y1, x2, y2]
 
-            # Apply Kalman filter for bbox smoothing
-            sx1, sy1, sx2, sy2 = self.bbox_tracker.update([x1, y1, x2, y2])
+            # Extract and flatten keypoints
+            keypoints = detection.keypoints
+            kp_coords = [coord for kp in keypoints for coord in (kp.x, kp.y)]
+
+            # Ensure we have 6 keypoints (12 coords) before proceeding
+            if len(kp_coords) != 12:
+                continue
+
+            # Form the unified measurement vector and update tracker
+            measurement = bbox_coords + kp_coords
+            smoothed_state = self.face_tracker.update(measurement)
+
+            # Unpack the smoothed state
+            smoothed_bbox = smoothed_state[:4]
+            smoothed_kp_coords = smoothed_state[4:]
+
+            sx1, sy1, sx2, sy2 = map(int, smoothed_bbox)
 
             # Ensure smoothed bbox is still within bounds
             sx1 = max(0, min(w - 1, sx1))
@@ -258,13 +277,23 @@ class GazePipeline3D:
             sx2 = max(sx1 + 1, min(w, sx2))
             sy2 = max(sy1 + 1, min(h, sy2))
 
+            # Reconstruct keypoints into usable format
+            reconstructed_kps = []
+            for i in range(0, len(smoothed_kp_coords), 2):
+                reconstructed_kps.append(
+                    SmoothedKeypoint(
+                        x=smoothed_kp_coords[i], y=smoothed_kp_coords[i + 1]
+                    )
+                )
+
             # Extract face crop
             crop = frame[sy1:sy2, sx1:sx2]
             if crop.size > 0:
                 face_crops.append(crop)
-                bboxes.append((sx1, sy1, sx2, sy2))
+                final_bboxes.append((sx1, sy1, sx2, sy2))
+                final_keypoints.append(reconstructed_kps)
 
-        return face_crops, bboxes, keypoints_list
+        return face_crops, final_bboxes, final_keypoints
 
     def _calculate_gaze_origin_features(self, keypoints, frame_w, frame_h):
         """
@@ -326,5 +355,5 @@ class GazePipeline3D:
 
     def reset_tracking(self):
         """Reset both bbox and gaze tracking states."""
-        self.bbox_tracker.reset()
+        self.face_tracker.reset()
         self.gaze_tracker.reset()

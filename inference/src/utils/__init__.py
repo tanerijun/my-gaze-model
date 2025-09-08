@@ -1,5 +1,5 @@
-from .gaze_tracker import GazeKalmanTracker
-from .kalman_tracker import KalmanBoxTracker
+from .face_kalman_tracker import FaceKalmanTracker
+from .gaze_kalman_tracker import GazeKalmanTracker
 from .transforms import (
     batch_preprocess_faces,
     get_gaze_transforms,
@@ -7,7 +7,7 @@ from .transforms import (
 )
 
 __all__ = [
-    "KalmanBoxTracker",
+    "FaceKalmanTracker",
     "GazeKalmanTracker",
     "get_gaze_transforms",
     "preprocess_face_crop",
