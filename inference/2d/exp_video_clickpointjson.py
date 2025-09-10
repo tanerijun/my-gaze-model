@@ -74,7 +74,7 @@ def prepare_calibration_data(
     all_frame_features: List[Dict],
     click_data_path: str,
     fps: float,
-    frame_window: int = 15,
+    frame_window: int = 5,
 ):
     """
     Populates the Mapper by extracting configured features from the 3D pipeline results.
@@ -118,7 +118,7 @@ def prepare_calibration_data(
 def prepare_test_data(
     click_data_path: str,
     fps: float,
-    frame_window: int = 15,
+    frame_window: int = 20,
 ) -> Tuple[List[int], np.ndarray]:
     """
     Identifies the frame indices to be tested and their corresponding ground truth labels.
@@ -254,55 +254,17 @@ def get_video_fps(video_path: str) -> float:
     cap.release()
     return fps
 
-def save_calibration_data_for_analysis(mapper: Mapper, output_dir: str, feature_keys: List[str]):
-    """Saves the collected calibration feature vectors and targets to a CSV file for analysis."""
-    if not mapper.training_feature_vectors:
-        print("No calibration data to save.")
-        return
-
-    # Create a DataFrame from the collected data
-    features_df = pd.DataFrame(mapper.training_feature_vectors, columns=feature_keys)
-    targets_df = pd.DataFrame(mapper.training_screen_points, columns=["target_x", "target_y"])
-
-    # Combine them for a complete dataset
-    full_df = pd.concat([features_df, targets_df], axis=1)
-
-    # Save to CSV
-    save_path = os.path.join(output_dir, "calibration_features_for_analysis.csv")
-    full_df.to_csv(save_path, index=False)
-    print(f"Calibration data saved for analysis at: {save_path}")
-
-
 
 def main(args):
-    if args.use_landmarker_features:
-        print("--- EXPERIMENT: Using FaceLandmarker for gaze origin features. ---")
-        feature_keys = [
-            "pitch", # Gaze pitch
-            "yaw",   # Gaze yaw
-            "head_pitch",
-            "head_yaw",
-            "head_roll",
-            "ipd"
-        ]
-        enable_landmarker = True
-    else:
-        print("--- EXPERIMENT: Using BlazeFace for gaze origin features. ---")
-        feature_keys = ["pitch", "yaw"]
-        enable_landmarker = False
-
-    print(f"Using {len(feature_keys)} features: {feature_keys}")
-
     pipeline_3d = GazePipeline3D(
         weights_path=args.weights,
         device="cuda" if torch.cuda.is_available() else "cpu",
         smooth_facebbox=True,
-        smooth_gaze=False,
-        enable_landmarker_features=enable_landmarker
+        smooth_gaze=True,
     )
     mapper = Mapper()
     pipeline_2d = GazePipeline2D(
-        pipeline_3d=pipeline_3d, mapper=mapper, feature_keys=feature_keys
+        pipeline_3d=pipeline_3d, mapper=mapper, feature_keys=["pitch", "yaw"]
     )
 
     # Calibration Phase
@@ -318,9 +280,6 @@ def main(args):
         click_data_path=args.calib_json,
         fps=calib_fps,
     )
-
-    os.makedirs(args.output_dir, exist_ok=True) # Ensure directory exists
-    save_calibration_data_for_analysis(mapper, args.output_dir, feature_keys)
 
     try:
         score_x, score_y = mapper.train()
@@ -424,12 +383,6 @@ if __name__ == "__main__":
         required=True,
         type=str,
         help="Directory to save the analysis plot.",
-    )
-
-    parser.add_argument(
-        "--use-landmarker-features",
-        action="store_true",
-        help="Enable FaceLandmarker and use its output for gaze origin features instead of BlazeFace.",
     )
 
     args = parser.parse_args()

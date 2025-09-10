@@ -3,7 +3,6 @@ import os
 
 import cv2
 import mediapipe as mp
-import numpy as np
 import torch
 import torch.nn.functional as F
 from mediapipe.tasks import python
