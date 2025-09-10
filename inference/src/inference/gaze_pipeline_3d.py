@@ -3,6 +3,7 @@ import os
 
 import cv2
 import mediapipe as mp
+import numpy as np
 import torch
 import torch.nn.functional as F
 from mediapipe.tasks import python
@@ -198,7 +199,7 @@ class GazePipeline3D:
         if not face_crops:
             return []
 
-        head_pose, mediapipe_landmarks = None, None
+        head_pose, mediapipe_landmarks, landmarker_result = None, None, None
         if self.enable_landmarker_features and self.face_landmarker:
             landmarker_result = self.face_landmarker.detect(mp_image)
             if landmarker_result.facial_transformation_matrixes:
@@ -222,7 +223,18 @@ class GazePipeline3D:
             pitch = float(decoded_preds[i][0])
             yaw = float(decoded_preds[i][1])
             smoothed_pitch, smoothed_yaw = self.gaze_tracker.update(pitch, yaw)
-            origin_features = self._calculate_gaze_origin_features(keypoints, w, h)
+
+            origin_features = {}
+            if (
+                self.enable_landmarker_features and landmarker_result
+                and landmarker_result.face_landmarks
+                and landmarker_result.facial_transformation_matrixes
+            ):
+                origin_features = self._calculate_gaze_origin_from_landmarker(
+                    landmarker_result, w, h
+                )
+            else:
+                origin_features = self._calculate_gaze_origin_features(keypoints, w, h)
 
             results.append(
                 {
@@ -336,6 +348,62 @@ class GazePipeline3D:
             "eye_center_y": eye_center_y,
             "ipd": normalized_ipd,
             "roll_angle": roll_angle,
+        }
+
+    def _calculate_gaze_origin_from_landmarker(
+        self, landmarker_result, frame_w: int, frame_h: int
+    ) -> dict:
+        """
+        Calculates gaze origin features from FaceLandmarker results.
+        This provides more robust head pose and landmark-derived features.
+        """
+        landmarks = landmarker_result.face_landmarks[0]
+        matrix = landmarker_result.facial_transformation_matrixes[0]
+
+        # --- Head Pose Angles from Transformation Matrix ---
+        # This  more robust way to get head pose than inferring from keypoints.
+        sy = math.sqrt(matrix[0, 0] * matrix[0, 0] + matrix[1, 0] * matrix[1, 0])
+        singular = sy < 1e-6
+        if not singular:
+            x = math.atan2(matrix[2, 1], matrix[2, 2])
+            y = math.atan2(-matrix[2, 0], sy)
+            z = math.atan2(matrix[1, 0], matrix[0, 0])
+        else:
+            x = math.atan2(-matrix[1, 2], matrix[1, 1])
+            y = math.atan2(-matrix[2, 0], sy)
+            z = 0
+
+        # Convert from radians to degrees
+        head_pitch = math.degrees(x)
+        head_yaw = math.degrees(y)
+        head_roll = math.degrees(z)
+
+        # --- 2. Eye Centers and IPD from Landmarks ---
+        # Using specific landmark indices for right and left eye centers
+        # These indices are from the official MediaPipe documentation.
+        # Left eye center: 473, Right eye center: 468
+        left_eye_center = landmarks[473]
+        right_eye_center = landmarks[468]
+
+        # De-normalize coordinates
+        le_x, le_y = left_eye_center.x * frame_w, left_eye_center.y * frame_h
+        re_x, re_y = right_eye_center.x * frame_w, right_eye_center.y * frame_h
+
+        # Calculate eye center (normalized)
+        eye_center_x = ((le_x + re_x) / 2.0) / frame_w
+        eye_center_y = ((le_y + re_y) / 2.0) / frame_h
+
+        # Calculate IPD (normalized)
+        ipd = math.sqrt((le_x - re_x) ** 2 + (le_y - re_y) ** 2)
+        normalized_ipd = ipd / frame_w
+
+        return {
+            "head_pitch": head_pitch,
+            "head_yaw": head_yaw,
+            "head_roll": head_roll,
+            "eye_center_x": eye_center_x,
+            "eye_center_y": eye_center_y,
+            "ipd": normalized_ipd,
         }
 
     def _get_bbox_from_landmarks(self, landmarks, frame_shape, margin=0.1):
