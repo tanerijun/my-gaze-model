@@ -15,3 +15,6 @@ PIPELINE_CONFIG = {
 }
 
 DATA_OUTPUT_DIR = PROJECT_ROOT / "collected_data"
+
+CAMERA_ID = 0  # Default webcam
+CAMERA_RESOLUTION = (1280, 720)  # Width, Height

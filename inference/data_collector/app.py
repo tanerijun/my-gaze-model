@@ -3,6 +3,7 @@ import sys
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication
 
+from data_collector.core.app_controller import AppController
 from data_collector.ui.system_tray import SystemTray
 
 
@@ -18,9 +19,12 @@ class SystemTrayApp(QObject):
         self.app.setQuitOnLastWindowClosed(False)
 
         self.tray = SystemTray()
+        self.controller = AppController()
 
-        self.tray.start_collection_requested.connect(self.start_collection)
-        self.tray.stop_collection_requested.connect(self.stop_collection)
+        self.tray.start_collection_requested.connect(self.on_start_request)
+        self.tray.stop_collection_requested.connect(self.on_stop_request)
+
+        self.app.aboutToQuit.connect(self.controller.cleanup)
 
         print("Application ready. Click the tray icon to start.")
 
@@ -28,17 +32,10 @@ class SystemTrayApp(QObject):
         """Starts the Qt event loop."""
         return self.app.exec()
 
-    def start_collection(self):
-        """
-        Placeholder slot for starting the data collection process.
-        In the next step, this will initialize and start the worker threads.
-        """
-        print("[APP LOGIC] 'Start Collection' signal received. Starting process...")
+    def on_start_request(self):
+        self.controller.start_collection()
         self.tray.set_menu_state(is_collecting=True)
 
-    def stop_collection(self):
-        """
-        Placeholder slot for stopping the data collection process.
-        """
-        print("[APP LOGIC] 'Stop Collection' signal received. Stopping process...")
+    def on_stop_request(self):
+        self.controller.stop_collection()
         self.tray.set_menu_state(is_collecting=False)
