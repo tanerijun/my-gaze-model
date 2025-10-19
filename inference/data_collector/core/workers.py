@@ -11,12 +11,13 @@ class CameraWorker(QObject):
     """Captures video frames from the camera in a separate thread."""
 
     frame_ready = pyqtSignal(np.ndarray)
+    camera_started = pyqtSignal(int, int)  # emits width and height
     camera_error = pyqtSignal(str)
 
-    def __init__(self, camera_id: int, resolution: tuple[int, int]):
+    def __init__(self, camera_id: int, desired_resolution: tuple[int, int]):
         super().__init__()
         self.camera_id = camera_id
-        self.resolution = resolution
+        self.desired_resolution = desired_resolution
         self._is_running = False
 
     @pyqtSlot()
@@ -27,10 +28,24 @@ class CameraWorker(QObject):
             self.camera_error.emit(f"Could not open camera with ID {self.camera_id}")
             return
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.resolution[0])
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.resolution[1])
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.desired_resolution[0])
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.desired_resolution[1])
+
+        actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+        if actual_width == 0 or actual_height == 0:
+            self.camera_error.emit(
+                f"Camera {self.camera_id} returned invalid resolution (0x0)."
+            )
+            cap.release()
+            return
+
+        # Emit actual resolution back to controller
+        self.camera_started.emit(actual_width, actual_height)
+
         self._is_running = True
-        print("Camera worker started.")
+        print(f"Camera worker started with resolution: {actual_width}x{actual_height}")
 
         while self._is_running:
             ret, frame = cap.read()

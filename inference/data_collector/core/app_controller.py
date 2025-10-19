@@ -12,13 +12,17 @@ class AppController(QObject):
     def __init__(self):
         super().__init__()
         self.is_collecting = False
+        self.session_metadata = {}
 
         # --- Setup Camera Thread ---
         self.camera_thread = QThread()
-        self.camera_worker = CameraWorker(config.CAMERA_ID, config.CAMERA_RESOLUTION)
+        self.camera_worker = CameraWorker(
+            config.CAMERA_ID, config.DESIRED_CAMERA_RESOLUTION
+        )
         self.camera_worker.moveToThread(self.camera_thread)
         self.camera_thread.started.connect(self.camera_worker.run)
         self.camera_worker.camera_error.connect(self.on_camera_error)
+        self.camera_worker.camera_started.connect(self.on_camera_started)
 
         # --- Setup Inference Thread ---
         self.inference_thread = QThread()
@@ -41,6 +45,7 @@ class AppController(QObject):
             return
         print("Controller: Starting worker threads...")
         self.is_collecting = True
+        self.session_metadata = {}
         self.camera_thread.start()
         self.inference_thread.start()
 
@@ -50,15 +55,19 @@ class AppController(QObject):
             return
         print("Controller: Stopping worker threads...")
         self.is_collecting = False
-
         self.camera_worker.stop()
-
         # Quit the threads and wait for them to finish
         self.camera_thread.quit()
         self.camera_thread.wait()
         self.inference_thread.quit()
         self.inference_thread.wait()
         print("Controller: Worker threads have stopped.")
+
+    @pyqtSlot(int, int)
+    def on_camera_started(self, width: int, height: int):
+        """Stores the actual camera resolution when the camera starts."""
+        print(f"Controller: Received actual camera resolution: {width}x{height}")
+        self.session_metadata["camera_resolution"] = {"width": width, "height": height}
 
     @pyqtSlot(list)
     def on_new_result(self, results: list):
