@@ -16,6 +16,7 @@ PIPELINE_CONFIG = {
 
 DATA_OUTPUT_DIR = PROJECT_ROOT / "collected_data"
 VIDEO_FPS = 30  # The target FPS for the output video file
+BENCHMARK_FRAMES = 100  # Number of frames to process for FPS calculation
 
 CAMERA_ID = 0  # Default webcam
 DESIRED_CAMERA_RESOLUTION = (1280, 720)  # Width, Height

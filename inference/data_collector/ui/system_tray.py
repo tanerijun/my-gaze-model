@@ -1,15 +1,16 @@
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from data_collector import config
+from data_collector.core.app_controller import AppState
 
 
 class SystemTray(QObject):
     """Manages the system tray icon and its menu."""
 
-    start_collection_requested = pyqtSignal()
-    stop_collection_requested = pyqtSignal()
+    start_requested = pyqtSignal()
+    stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -29,36 +30,36 @@ class SystemTray(QObject):
         print("System tray icon initialized.")
 
     def _create_actions(self):
-        """Creates the menu actions and connects them."""
-        self.start_action = QAction("🟢 Start Collection")
-        self.start_action.triggered.connect(self.start_collection_requested.emit)
-        self.menu.addAction(self.start_action)
+        """Creates the menu actions."""
+        self.main_action = QAction("🟢 Start Session")
+        self.main_action.triggered.connect(self.start_requested.emit)
+        self.menu.addAction(self.main_action)
+
+        self.stop_action = QAction("🔴 Stop Session")
+        self.stop_action.triggered.connect(self.stop_requested.emit)
+        self.stop_action.setVisible(False)
+        self.menu.addAction(self.stop_action)
 
         self.menu.addSeparator()
-
         self.about_action = QAction("ℹ️ About")
-        # self.about_action.triggered.connect(self.show_about_dialog) # Placeholder
         self.menu.addAction(self.about_action)
-
         self.quit_action = QAction("❌ Quit")
         self.quit_action.triggered.connect(QApplication.quit)
         self.menu.addAction(self.quit_action)
 
-    def set_menu_state(self, is_collecting: bool):
-        """Updates the menu text and enabled state based on app status."""
-        if is_collecting:
-            self.start_action.setText("🔴 Stop Collection")
-            # Disconnect start, connect stop
-            try:
-                self.start_action.triggered.disconnect()
-            except TypeError:
-                pass
-            self.start_action.triggered.connect(self.stop_collection_requested.emit)
-        else:
-            self.start_action.setText("🟢 Start Collection")
-            # Disconnect stop, connect start
-            try:
-                self.start_action.triggered.disconnect()
-            except TypeError:
-                pass
-            self.start_action.triggered.connect(self.start_collection_requested.emit)
+    @pyqtSlot(AppState)
+    def update_state(self, state: AppState):
+        """Updates the menu based on the application's state."""
+        is_active = state not in [AppState.IDLE, AppState.READY_TO_CALIBRATE]
+        self.stop_action.setVisible(is_active)
+
+        if state == AppState.IDLE:
+            self.main_action.setText("🟢 Start Session")
+            self.main_action.setEnabled(True)
+        elif state == AppState.BENCHMARKING:
+            self.main_action.setText("⏳ Benchmarking...")
+            self.main_action.setEnabled(False)
+        elif state == AppState.READY_TO_CALIBRATE:
+            self.main_action.setText("▶️ Start Calibration")
+            self.main_action.setEnabled(True)
+        # Add more states here later (CALIBRATING, COLLECTING)

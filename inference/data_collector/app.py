@@ -3,7 +3,7 @@ import sys
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication
 
-from data_collector.core.app_controller import AppController
+from data_collector.core.app_controller import AppController, AppState
 from data_collector.ui.system_tray import SystemTray
 
 
@@ -15,14 +15,15 @@ class SystemTrayApp(QObject):
     def __init__(self):
         super().__init__()
         self.app = QApplication(sys.argv)
-        # Prevent the app from closing when a window is closed (important for tray apps)
         self.app.setQuitOnLastWindowClosed(False)
 
         self.tray = SystemTray()
         self.controller = AppController()
 
-        self.tray.start_collection_requested.connect(self.on_start_request)
-        self.tray.stop_collection_requested.connect(self.on_stop_request)
+        self.tray.start_requested.connect(self.on_start_request)
+        self.tray.stop_requested.connect(self.controller.stop_session)
+
+        self.controller.state_changed.connect(self.tray.update_state)
 
         self.app.aboutToQuit.connect(self.controller.cleanup)
 
@@ -33,9 +34,10 @@ class SystemTrayApp(QObject):
         return self.app.exec()
 
     def on_start_request(self):
-        self.controller.start_collection()
-        self.tray.set_menu_state(is_collecting=True)
-
-    def on_stop_request(self):
-        self.controller.stop_collection()
-        self.tray.set_menu_state(is_collecting=False)
+        """Handles the primary 'start' action from the tray menu."""
+        current_state = self.controller.state
+        if current_state == AppState.IDLE:
+            self.controller.start_session()
+        elif current_state == AppState.READY_TO_CALIBRATE:
+            print("TODO: Start the calibration process now.")
+            # self.controller.start_calibration() # This will be the next step
