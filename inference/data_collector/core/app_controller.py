@@ -101,6 +101,8 @@ class AppController(QObject):
             "height": screen.size().height(),
         }
 
+        self.camera_worker.set_video_recording(False)
+
         self.camera_thread.start()
         self.inference_thread.start()
 
@@ -170,6 +172,8 @@ class AppController(QObject):
             self.camera_thread.wait()
             self.inference_thread.quit()
             self.inference_thread.wait()
+
+            self.camera_worker.set_video_recording(True)
 
             self._set_state(AppState.READY_TO_CALIBRATE)
             print("\nReady to start calibration.")

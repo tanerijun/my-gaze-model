@@ -29,6 +29,11 @@ class CameraWorker(QObject):
         self.video_queue = video_queue
         self.inference_queue = inference_queue
         self._is_running = False
+        self._enable_video_recording = True
+
+    def set_video_recording(self, enabled: bool):
+        """Enable or disable writing frames to the video queue."""
+        self._enable_video_recording = enabled
 
     @pyqtSlot()
     def run(self):
@@ -65,7 +70,9 @@ class CameraWorker(QObject):
             # Flip the frame horizontally for a mirror effect, common for webcams
             frame = cv2.flip(frame, 1)
 
-            self.video_queue.put(frame)
+            if self._enable_video_recording:
+                self.video_queue.put(frame)
+
             self.inference_queue.put(frame)
 
         cap.release()
