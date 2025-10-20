@@ -2,6 +2,7 @@ import time
 from queue import Empty, Queue
 
 import cv2
+import numpy as np
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from src.inference import GazePipeline3D
@@ -13,6 +14,7 @@ class CameraWorker(QObject):
     Put frames into queues for consumption.
     """
 
+    frame_ready = pyqtSignal(np.ndarray)
     camera_started = pyqtSignal(int, int)  # emits width and height
     camera_error = pyqtSignal(str)
 
@@ -70,6 +72,9 @@ class CameraWorker(QObject):
             # Flip the frame horizontally for a mirror effect, common for webcams
             frame = cv2.flip(frame, 1)
 
+            # Emit the raw frame for any listeners (like the benchmark)
+            self.frame_ready.emit(frame)
+
             if self._enable_video_recording:
                 self.video_queue.put(frame)
 
@@ -90,6 +95,7 @@ class InferenceWorker(QObject):
     """
 
     result_ready = pyqtSignal(list)
+    benchmark_finished = pyqtSignal(float)  # dedicated benchmark is done
 
     def __init__(self, weights_path: str, config: dict, inference_queue: Queue):
         super().__init__()
@@ -141,6 +147,26 @@ class InferenceWorker(QObject):
                 print(f"Error during inference: {e}")
 
         print("Inference loop stopped.")
+
+    @pyqtSlot(np.ndarray, int)
+    def run_benchmark(self, frame: np.ndarray, num_frames: int):
+        """Runs a blocking benchmark on a single frame."""
+        if not self.pipeline:
+            print("Cannot run benchmark, pipeline not initialized.")
+            self.benchmark_finished.emit(-1.0)
+            return
+
+        print(f"Starting dedicated benchmark for {num_frames} iterations...")
+        start_time = time.monotonic()
+
+        for i in range(num_frames):
+            _ = self.pipeline(frame)
+            print(f"Benchmarking... Frame {i + 1}/{num_frames}", end="\r")
+
+        duration = time.monotonic() - start_time
+        fps = num_frames / duration
+        print(f"\nDedicated benchmark finished. FPS: {fps:.2f}")
+        self.benchmark_finished.emit(fps)
 
     def stop(self):
         self._is_running = False
