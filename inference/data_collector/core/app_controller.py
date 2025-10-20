@@ -216,26 +216,49 @@ class AppController(QObject):
     # --- Utility and Cleanup Methods ---
 
     def _print_session_summary(self):
-        """Prints a formatted summary of the collected metadata."""
-        info = self.session_metadata
+        """Prints a nicely formatted summary of the collected metadata."""
+        session_info = self.session_metadata
+        sys_info = session_info.get("system_info", {})
+
         print("\n================ SESSION METADATA ================")
-        print(f"OS:            {info['system_info']['os']}")
-        cpu = info["system_info"]["cpu"]
-        print(
-            f"CPU:           {cpu['name']} ({cpu['physical_cores']}P/{cpu['total_cores']}T cores)"
-        )
-        ram = info["system_info"]["ram"]
-        print(
-            f"RAM:           {ram['total_gb']} GB Total, {ram['available_gb']} GB Available"
-        )
-        print(
-            f"Screen Size:   {info['screen_size']['width']}x{info['screen_size']['height']}"
-        )
-        if "camera_resolution" in info:
-            res = info["camera_resolution"]
-            print(f"Camera Res:    {res['width']}x{res['height']}")
+        print(f"OS:            {sys_info.get('os', 'N/A')}")
+        print(f"Python Version:{sys_info.get('python_version', 'N/A')}")
+        print(f"Torch Version: {sys_info.get('torch_version', 'N/A')}")
+
+        cpu = sys_info.get("cpu", {})
+        if cpu:
+            print("-------------------- CPU ---------------------")
+            print(f"Brand:         {cpu.get('brand', 'N/A')}")
+            print(f"Arch:          {cpu.get('arch', 'N/A')}")
+            print(f"Base Speed:    {cpu.get('base_speed_ghz', 0):.2f} GHz")
+            print(
+                f"Cores:         {cpu.get('physical_cores', 0)} Physical / {cpu.get('total_cores', 0)} Total"
+            )
+            print(f"Usage:         {cpu.get('current_usage_percent', 0)}%")
+            print(
+                f"L2/L3 Cache:   {cpu.get('l2_cache_size_kb', 0)} KB / {cpu.get('l3_cache_size_kb', 0)} KB"
+            )
+
+        ram = sys_info.get("ram", {})
+        if ram:
+            print("-------------------- RAM ---------------------")
+            print(
+                f"Total/Avail:   {ram.get('total_gb', 0):.2f} GB / {ram.get('available_gb', 0):.2f} GB"
+            )
+            print(f"Usage:         {ram.get('usage_percent', 0)}%")
+
+        # Now, access the top-level keys from the main session dictionary
+        screen = session_info.get("screen_size", {})
+        if screen:
+            print(f"Screen Res:    {screen.get('width', 0)}x{screen.get('height', 0)}")
+
+        cam = session_info.get("camera_resolution", {})
+        if cam:
+            print(f"Camera Res:    {cam.get('width', 0)}x{cam.get('height', 0)}")
+
         print("--------------------------------------------------")
-        print(f"INFERENCE FPS: {info['performance']['inference_fps']:.2f} FPS")
+        perf = session_info.get("performance", {})
+        print(f"INFERENCE FPS: {perf.get('inference_fps', 0.0):.2f} FPS")
         print("==================================================")
 
     def on_camera_error(self, error_msg: str):
