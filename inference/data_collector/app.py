@@ -39,5 +39,4 @@ class SystemTrayApp(QObject):
         if current_state == AppState.IDLE:
             self.controller.start_session()
         elif current_state == AppState.READY_TO_CALIBRATE:
-            print("TODO: Start the calibration process now.")
-            # self.controller.start_calibration() # This will be the next step
+            self.controller.start_data_collection()

@@ -62,4 +62,9 @@ class SystemTray(QObject):
         elif state == AppState.READY_TO_CALIBRATE:
             self.main_action.setText("▶️ Start Calibration")
             self.main_action.setEnabled(True)
-        # Add more states here later (CALIBRATING, COLLECTING)
+        elif state == AppState.CALIBRATING:
+            self.main_action.setText("📍 Calibrating...")
+            self.main_action.setEnabled(False)
+        elif state == AppState.COLLECTING:
+            self.main_action.setText("🔴 Collecting Data...")
+            self.main_action.setEnabled(False)
