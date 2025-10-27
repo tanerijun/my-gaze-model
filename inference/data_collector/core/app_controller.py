@@ -369,7 +369,7 @@ class AppController(QObject):
 
         target_x, target_y = self.calibration_grid[self.calibration_current_index]
         self.overlay.set_calibration_point(target_x, target_y)
-        self.overlay.showFullScreen()
+        self.overlay.show_as_overlay()
         print(f"Showing calibration point {self.calibration_current_index + 1}/9")
 
     def _on_fixation_complete(self):

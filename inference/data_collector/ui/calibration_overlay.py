@@ -22,7 +22,7 @@ class CalibrationOverlay(QWidget):
         - cancel_requested: Emitted when user presses ESC.
         - continue_requested: Emitted when user presses Space.
 
-    The overlay should be shown with `showFullScreen()` and can be controlled via:
+    The overlay should be shown with `show_as_overlay()` and can be controlled via:
         - set_calibration_point(x, y): Display a calibration point
         - set_warning_message(message): Show a warning message
         - clear_warning(): Hide the warning
@@ -47,12 +47,17 @@ class CalibrationOverlay(QWidget):
         super().__init__(parent)
 
         # Window flags: frameless, transparent, always on top
+        # Use WindowStaysOnTopHint and bypass window manager to create true overlay
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.Tool
+            | Qt.WindowType.BypassWindowManagerHint  # Prevents creating new space on macOS
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating
+        )  # Don't steal focus
 
         # Current calibration point (screen coordinates)
         self.calibration_point: Optional[tuple[int, int]] = None
@@ -82,9 +87,6 @@ class CalibrationOverlay(QWidget):
         self.pulsate_timer = QTimer()
         self.pulsate_timer.timeout.connect(self._update_pulsate)
         self.pulsate_timer.setInterval(16)  # ~60fps
-
-        # Set a semi-transparent dark background for the entire overlay
-        self.setStyleSheet("background-color: rgba(0, 0, 0, 20);")
 
         print("CalibrationOverlay initialized.")
 
@@ -158,10 +160,32 @@ class CalibrationOverlay(QWidget):
         self.show_instructions = show
         self.update()
 
+    def show_as_overlay(self):
+        """
+        Show the overlay as a true overlay covering the entire screen.
+
+        This creates a borderless window that covers the screen without entering
+        fullscreen mode (which would create a new space on macOS).
+        """
+        from PyQt6.QtWidgets import QApplication
+
+        # Get the primary screen geometry
+        screen = QApplication.primaryScreen()
+        if screen:
+            geometry = screen.geometry()
+            self.setGeometry(geometry)
+
+        self.show()
+        self.raise_()  # Bring to front
+        self.activateWindow()  # Activate the window
+
     def paintEvent(self, a0: "QPaintEvent") -> None:  # type: ignore  # noqa: F821
         """Draws the overlay elements."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        # Draw semi-transparent black background
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 220))  # 230/255 = ~90% opacity
 
         # Draw calibration point if set
         if self.calibration_point:
