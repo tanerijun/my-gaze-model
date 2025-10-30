@@ -16,6 +16,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtWidgets import QApplication
 
 from data_collector import config
+from data_collector.core.data_manager import DataManager
 from data_collector.core.workers import CameraWorker, InferenceWorker, StorageWorker
 from data_collector.ui.calibration_overlay import CalibrationOverlay
 from data_collector.utils.system_info import get_system_info
@@ -27,6 +28,64 @@ class AppState(Enum):
     READY_TO_CALIBRATE = auto()
     CALIBRATING = auto()
     COLLECTING = auto()
+    PAUSED_BY_DRIFT = auto()
+
+
+def _make_json_serializable(obj):  # type: ignore
+    """
+    Convert an object to a JSON-serializable format.
+    Handles numpy arrays, custom objects with __dict__, and nested structures.
+    """
+    if obj is None:
+        return None
+    elif isinstance(obj, (int, float, str, bool)):
+        return obj
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (list, tuple)):
+        return [_make_json_serializable(item) for item in obj]
+    elif isinstance(obj, dict):
+        return {key: _make_json_serializable(value) for key, value in obj.items()}
+    elif hasattr(obj, "__dict__"):
+        # Convert custom objects to dict
+        return _make_json_serializable(obj.__dict__)
+    else:
+        # For any other type, try to convert to string
+        return str(obj)
+
+
+def _filter_gaze_result(gaze_result):
+    """
+    Filter gaze result to keep only necessary fields for data collection.
+    Removes large/unnecessary data like head_pose_matrix, mediapipe_landmarks, blaze_keypoints.
+    """
+    if not gaze_result:
+        return None
+
+    # Only keep the fields we care about
+    filtered = {}
+
+    # Keep gaze angles (pitch, yaw, roll)
+    if "gaze" in gaze_result:
+        filtered["gaze"] = {
+            "pitch": gaze_result["gaze"].get("pitch"),
+            "yaw": gaze_result["gaze"].get("yaw"),
+            "roll": gaze_result["gaze"].get("roll"),
+        }
+
+    # Keep eye-related measurements
+    if "eye_distance" in gaze_result:
+        filtered["eye_distance"] = gaze_result["eye_distance"]
+
+    if "eye_center" in gaze_result:
+        filtered["eye_center"] = gaze_result["eye_center"]
+
+    # Keep face bbox for reference
+    if "face_bbox" in gaze_result:
+        filtered["face_bbox"] = gaze_result["face_bbox"]
+
+    # Convert to JSON-serializable format
+    return _make_json_serializable(filtered)
 
 
 class AppController(QObject):
@@ -49,6 +108,9 @@ class AppController(QObject):
 
         self.video_queue = Queue(maxsize=120)  # Buffer ~2s of video at 60fps
         self.inference_queue = Queue(maxsize=5)  # Small buffer, we only need the latest
+
+        # --- Setup Data Manager ---
+        self.data_manager = DataManager(config.DATA_OUTPUT_DIR)
 
         # --- Setup Calibration Overlay ---
         self.overlay = CalibrationOverlay()
@@ -153,12 +215,19 @@ class AppController(QObject):
         print("\n--- Starting Session: Stage 2 - Calibration ---")
         self._set_state(AppState.CALIBRATING)
 
+        # Initialize data manager with session metadata
+        session_id = self.data_manager.start_session(self.session_metadata)
+        print(f"Session ID: {session_id}")
+
         # Initialize calibration state tracking
         self.calibration_points_collected = []  # List of (target_x, target_y, actual_x, actual_y, head_pose)
         self.calibration_grid = self._generate_calibration_grid()
         self.calibration_current_index = 0
         self._calibration_started = False
         self._waiting_for_space = False  # Flag to require Space before next point
+
+        # Track video start time for timestamp calculations
+        self.video_start_time = datetime.datetime.now()
 
         # Enable video recording
         self.camera_worker.set_video_recording(True)
@@ -240,6 +309,11 @@ class AppController(QObject):
         while not self.inference_queue.empty():
             self.inference_queue.get_nowait()
 
+        # Save session data to disk
+        json_path = self.data_manager.save_to_disk()
+        if json_path:
+            print(f"Session data saved to: {json_path}")
+
         self._set_state(AppState.IDLE)
         print("Controller: All processes stopped. Ready for new session.")
 
@@ -294,9 +368,15 @@ class AppController(QObject):
 
     @pyqtSlot(int, int)
     def on_camera_ready_for_recording(self, width: int, height: int):
-        session_id = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        # Use the session_id from data_manager to ensure consistency
+        session_id = self.data_manager.session_id
         video_filename = f"session_{session_id}.mp4"
-        output_path = str(config.DATA_OUTPUT_DIR / video_filename)
+        session_dir = config.DATA_OUTPUT_DIR / f"session_{session_id}"
+        output_path = str(session_dir / video_filename)
+
+        # Store video filename in data manager
+        self.data_manager.set_video_filename(video_filename)
+
         self.start_recording_signal.emit(output_path, width, height, config.VIDEO_FPS)
         self.camera_worker.camera_started.disconnect(self.on_camera_ready_for_recording)
 
@@ -316,10 +396,38 @@ class AppController(QObject):
                 self._show_next_calibration_point()
         elif self.state == AppState.COLLECTING:
             gaze = results[0]["gaze"]
+
+            # Check for head pose drift
+            is_drifted, drift_message = self._check_head_pose_drift(results[0])
+
+            if is_drifted:
+                # Pause collection and show warning
+                self._set_state(AppState.PAUSED_BY_DRIFT)
+                # Clear all previous overlay messages first
+                self.overlay.clear_calibration_point()
+                self.overlay.clear_central_message()
+                self.overlay.show_instruction_text(False)
+                # Show warning message
+                self.overlay.set_warning_message(
+                    drift_message + "\n\nPlease return to your original position"
+                )
+                self.overlay.show_as_overlay()
+                print(f"\n{drift_message} - Data collection paused")
+
             print(
                 f"Gaze Result: Pitch={gaze['pitch']:.1f}, Yaw={gaze['yaw']:.1f}",
                 end="\r",
             )
+        elif self.state == AppState.PAUSED_BY_DRIFT:
+            # Check if user has returned to acceptable pose
+            is_drifted, _ = self._check_head_pose_drift(results[0])
+
+            if not is_drifted:
+                # Resume collection
+                print("\n✓ Head pose restored - Resuming data collection")
+                self.overlay.clear_warning()
+                self.overlay.close()
+                self._set_state(AppState.COLLECTING)
 
     @pyqtSlot(int, int)
     def on_calibration_point_clicked(self, x: int, y: int):
@@ -332,17 +440,33 @@ class AppController(QObject):
         # Get the current target point
         target_x, target_y = self.calibration_grid[self.calibration_current_index]
 
-        # Get the most recent gaze result
+        # Get the most recent gaze result, filter unnecessary fields, and make it JSON-serializable
         gaze_result = getattr(self, "last_gaze_result", None)
+        gaze_result_serializable = _filter_gaze_result(gaze_result)
 
-        # Record the collected point
+        # Calculate video timestamp (time since video started)
+        video_timestamp = (
+            datetime.datetime.now() - self.video_start_time
+        ).total_seconds()
+
+        # Record the collected point for local tracking
         self.calibration_points_collected.append(
             {
                 "target": (target_x, target_y),
                 "click": (x, y),
-                "gaze_result": gaze_result,
+                "gaze_result": gaze_result,  # Keep original for drift calculation
                 "timestamp": datetime.datetime.now().isoformat(),
             }
+        )
+
+        # Save to data manager (use serializable version)
+        self.data_manager.add_calibration_point(
+            target_x=target_x,
+            target_y=target_y,
+            click_x=x,
+            click_y=y,
+            gaze_result=gaze_result_serializable,  # type: ignore
+            video_timestamp=video_timestamp,
         )
 
         print(f"Point {self.calibration_current_index + 1}/9 collected")
@@ -414,7 +538,9 @@ class AppController(QObject):
                 # Average the head pose data
                 avg_head_data = self._average_head_poses(gaze_results)
                 self.baseline_head_pose = avg_head_data
-                print("Baseline head pose calculated")
+                # Save baseline to data manager
+                self.data_manager.set_baseline_head_pose(avg_head_data)
+                print("Baseline head pose calculated and saved")
 
         # Immediately close the overlay and force update
         self.overlay.close()
@@ -425,13 +551,105 @@ class AppController(QObject):
 
     def _average_head_poses(self, gaze_results: list) -> dict:
         """Average multiple gaze results to get a baseline head pose."""
-        # This is a simplified version; you can expand this based on your head pose format
         avg_pose = {}
         if gaze_results:
-            # Assuming each result has a 'head_pose' or similar field
-            # We'll just store the raw results for now
-            avg_pose["raw_results"] = gaze_results
+            # Extract only the features we care about for drift detection
+            rolls = [
+                r["gaze"]["roll"]
+                for r in gaze_results
+                if "gaze" in r and "roll" in r["gaze"]
+            ]
+            eye_distances = [
+                r["eye_distance"] for r in gaze_results if "eye_distance" in r
+            ]
+            eye_centers_x = [
+                r["eye_center"][0]
+                for r in gaze_results
+                if "eye_center" in r and len(r["eye_center"]) >= 2
+            ]
+            eye_centers_y = [
+                r["eye_center"][1]
+                for r in gaze_results
+                if "eye_center" in r and len(r["eye_center"]) >= 2
+            ]
+
+            # Calculate averages
+            avg_pose["roll"] = sum(rolls) / len(rolls) if rolls else 0.0
+            avg_pose["eye_distance"] = (
+                sum(eye_distances) / len(eye_distances) if eye_distances else 0.0
+            )
+            avg_pose["eye_center_x"] = (
+                sum(eye_centers_x) / len(eye_centers_x) if eye_centers_x else 0.0
+            )
+            avg_pose["eye_center_y"] = (
+                sum(eye_centers_y) / len(eye_centers_y) if eye_centers_y else 0.0
+            )
+
+            # Store metadata about the baseline calculation
+            avg_pose["num_samples"] = len(gaze_results)
         return avg_pose
+
+    def _check_head_pose_drift(self, current_result: dict) -> tuple[bool, str]:
+        """
+        Check if the current head pose has drifted too far from baseline.
+
+        Args:
+            current_result: Current gaze result dictionary
+
+        Returns:
+            (is_drifted, message): Tuple of boolean and warning message
+        """
+        if not hasattr(self, "baseline_head_pose") or not self.baseline_head_pose:
+            return False, ""
+
+        baseline = self.baseline_head_pose
+        current_gaze = current_result.get("gaze", {})
+        current_eye_dist = current_result.get("eye_distance", 0.0)
+        current_eye_center = current_result.get("eye_center", [0.0, 0.0])
+
+        # Check roll drift
+        roll_diff = abs(current_gaze.get("roll", 0.0) - baseline.get("roll", 0.0))
+        if roll_diff > config.DRIFT_THRESHOLDS["roll_degrees"]:
+            return True, f"⚠️ Head rolled too much (roll: {roll_diff:.1f}°)"
+
+        # Check eye distance (IPD) change - indicates moving closer/farther
+        baseline_eye_dist = baseline.get("eye_distance", 0.0)
+        if baseline_eye_dist > 0:
+            eye_dist_ratio = (
+                abs(current_eye_dist - baseline_eye_dist) / baseline_eye_dist
+            )
+            if eye_dist_ratio > config.DRIFT_THRESHOLDS["eye_distance_ratio"]:
+                direction = (
+                    "closer" if current_eye_dist > baseline_eye_dist else "farther"
+                )
+                return (
+                    True,
+                    f"⚠️ Moved too {direction} from camera ({eye_dist_ratio * 100:.1f}% change)",
+                )
+
+        # Check eye center position drift (lateral/vertical head movement)
+        baseline_eye_center_x = baseline.get("eye_center_x", 0.0)
+        baseline_eye_center_y = baseline.get("eye_center_y", 0.0)
+        current_eye_center_x = (
+            current_eye_center[0] if len(current_eye_center) >= 2 else 0.0
+        )
+        current_eye_center_y = (
+            current_eye_center[1] if len(current_eye_center) >= 2 else 0.0
+        )
+
+        # Calculate Euclidean distance of eye center movement
+        eye_center_shift = (
+            (current_eye_center_x - baseline_eye_center_x) ** 2
+            + (current_eye_center_y - baseline_eye_center_y) ** 2
+        ) ** 0.5
+
+        if eye_center_shift > config.DRIFT_THRESHOLDS["eye_center_shift_pixels"]:
+            return (
+                True,
+                f"⚠️ Head shifted position ({eye_center_shift:.1f} pixels)",
+            )
+
+        return False, ""
 
     @pyqtSlot()
     def on_calibration_cancelled(self):

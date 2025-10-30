@@ -68,3 +68,6 @@ class SystemTray(QObject):
         elif state == AppState.COLLECTING:
             self.main_action.setText("🔴 Collecting Data...")
             self.main_action.setEnabled(False)
+        elif state == AppState.PAUSED_BY_DRIFT:
+            self.main_action.setText("⚠️ Paused (Head Pose Drift)")
+            self.main_action.setEnabled(False)

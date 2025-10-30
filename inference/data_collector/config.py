@@ -20,3 +20,14 @@ BENCHMARK_FRAMES = 100  # Number of frames to process for FPS calculation
 
 CAMERA_ID = 0  # Default webcam
 DESIRED_CAMERA_RESOLUTION = (1280, 720)  # Width, Height
+
+# Head Pose Drift Detection Thresholds
+DRIFT_THRESHOLDS = {
+    "roll_degrees": 20.0,  # Maximum roll deviation in degrees
+    "eye_distance_ratio": 0.25,  # Maximum IPD change ratio (e.g., 0.25 = 25%)
+    "eye_center_shift_pixels": 50.0,  # Maximum eye center position shift in pixels
+}
+
+# Continuous Collection Settings
+EXPLICIT_POINT_INTERVAL_SECONDS = 20  # Time between random explicit points
+ENABLE_IMPLICIT_CLICKS = True  # Enable tracking of natural mouse clicks
