@@ -38,24 +38,40 @@ class DataManager:
         self.session_dir: Optional[Path] = None
         self.video_filename: Optional[str] = None
 
-    def start_session(self, metadata: Dict) -> str:
+    def start_session(
+        self, metadata: Dict, participant_name: Optional[str] = None
+    ) -> str:
         """
         Initialize a new session with metadata.
 
         Args:
             metadata: Dictionary containing system_info, screen_size, camera_resolution,
                      performance benchmarks, etc.
+            participant_name: Optional participant name/ID to prefix the session
 
         Returns:
             session_id: Unique identifier for this session (timestamp-based)
         """
-        self.session_id = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
+        # Add participant name prefix if provided
+        if participant_name:
+            # Sanitize name for filename
+            safe_name = "".join(
+                c for c in participant_name if c.isalnum() or c in (" ", "-", "_")
+            ).strip()
+            safe_name = safe_name.replace(" ", "-")
+            self.session_id = f"{safe_name}_{timestamp}"
+        else:
+            self.session_id = timestamp
+
         self.session_dir = self.output_dir / f"session_{self.session_id}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize session data structure
         self.session_data = {
             "session_id": self.session_id,
+            "participant_name": participant_name or "Anonymous",
             "start_time": datetime.datetime.now().isoformat(),
             "metadata": metadata,
             "calibration": {"baseline_head_pose": None, "calibration_points": []},

@@ -26,7 +26,7 @@ class GazeDataCollectionApp(QObject):
         self.collection_elapsed = 0
 
         # Connect UI signals to controller
-        self.window.benchmark_requested.connect(self.controller.start_session)
+        self.window.benchmark_requested.connect(self._on_benchmark_requested)
         self.window.calibration_requested.connect(self.controller.start_data_collection)
         # Note: collection starts automatically after calibration
         self.window.stop_collection_requested.connect(self._on_stop_collection)
@@ -44,6 +44,12 @@ class GazeDataCollectionApp(QObject):
         """Starts the Qt event loop."""
         self.window.show()
         return self.app.exec()
+
+    def _on_benchmark_requested(self):
+        """Handle benchmark request - store participant name and start session."""
+        # Store participant name from window
+        self.controller.participant_name = self.window.participant_name
+        self.controller.start_session()
 
     def _on_state_changed(self, state: AppState):
         """Handle state changes from the controller."""
@@ -121,9 +127,32 @@ class GazeDataCollectionApp(QObject):
                 )
                 return
 
-            # Upload file
+            # Show progress dialog
+            from PyQt6.QtCore import Qt
+            from PyQt6.QtWidgets import QProgressDialog
+
+            progress = QProgressDialog(
+                "Uploading data to server...",
+                None,  # No cancel button
+                0,
+                100,
+                self.window,
+            )
+            progress.setWindowTitle("Uploading")
+            progress.setWindowModality(Qt.WindowModality.WindowModal)
+            progress.setMinimumDuration(0)  # Show immediately
+            progress.setValue(0)
+            progress.show()
+            QApplication.processEvents()
+
+            # Upload file - don't use callback, just show indeterminate progress
             print(f"Uploading {zip_path.name} to R2...")
-            file_url = uploader.upload_file(str(zip_path))
+
+            # Use a simple approach: just show the dialog and upload
+            file_url = uploader.upload_file(str(zip_path), progress_callback=None)
+
+            progress.setValue(100)
+            progress.close()
 
             if file_url:
                 QMessageBox.information(

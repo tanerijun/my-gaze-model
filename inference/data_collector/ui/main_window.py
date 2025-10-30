@@ -222,7 +222,27 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.collection_start_time = None
+        self.participant_name = None
         self._setup_ui()
+        self._ask_participant_name()
+
+    def _ask_participant_name(self):
+        """Ask for participant name at startup."""
+        from PyQt6.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Participant Name",
+            "Please enter your name or ID:",
+            text="Participant",
+        )
+
+        if ok and name.strip():
+            self.participant_name = name.strip()
+        else:
+            self.participant_name = "Anonymous"
+
+        print(f"Participant: {self.participant_name}")
 
     def _setup_ui(self):
         self.setWindowTitle("Gaze Data Collection Tool")

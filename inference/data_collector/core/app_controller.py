@@ -106,6 +106,7 @@ class AppController(QObject):
         super().__init__()
         self.state = AppState.IDLE
         self.session_metadata = {}
+        self.participant_name = None
 
         self.benchmark_frame_count = 0
         self.benchmark_start_time = 0.0
@@ -241,7 +242,9 @@ class AppController(QObject):
         self._set_state(AppState.CALIBRATING)
 
         # Initialize data manager with session metadata
-        session_id = self.data_manager.start_session(self.session_metadata)
+        session_id = self.data_manager.start_session(
+            self.session_metadata, self.participant_name
+        )
         print(f"Session ID: {session_id}")
 
         # Initialize calibration state tracking
