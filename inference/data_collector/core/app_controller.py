@@ -15,7 +15,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from data_collector import config
 from data_collector.core.data_manager import DataManager
@@ -906,6 +906,77 @@ class AppController(QObject):
     def on_camera_error(self, error_msg: str):
         print(f"FATAL CAMERA ERROR: {error_msg}")
         self.stop_session()
+
+    @pyqtSlot()
+    def export_last_session(self):
+        """
+        Export the last completed session as a ZIP file.
+        Opens a file dialog to let the user choose the save location.
+        """
+        # Check if there's a session to export
+        if not self.data_manager.session_id:
+            # No current session, try to find the most recent one
+            session_dirs = sorted(
+                [
+                    d
+                    for d in config.DATA_OUTPUT_DIR.iterdir()
+                    if d.is_dir() and d.name.startswith("session_")
+                ],
+                reverse=True,
+            )
+
+            if not session_dirs:
+                print("No sessions available to export.")
+                QMessageBox.warning(
+                    None, "No Sessions", "There are no completed sessions to export."
+                )
+                return
+
+            # Use the most recent session
+            most_recent = session_dirs[0]
+            session_id = most_recent.name.replace("session_", "")
+        else:
+            session_id = self.data_manager.session_id
+
+        # Open file dialog to choose save location
+        default_name = f"session_{session_id}.zip"
+        file_path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Export Session as ZIP",
+            str(config.DATA_OUTPUT_DIR / default_name),
+            "ZIP Files (*.zip)",
+        )
+
+        if not file_path:
+            print("Export cancelled by user.")
+            return
+
+        # Export the session using DataManager
+        try:
+            zip_path = self.data_manager.export_session_as_zip(session_id)
+
+            if zip_path and zip_path.exists():
+                # Move the exported ZIP to the user-selected location
+                import shutil
+
+                shutil.move(str(zip_path), file_path)
+
+                print("\n✅ Session exported successfully!")
+                print(f"📦 Location: {file_path}\n")
+
+                QMessageBox.information(
+                    None,
+                    "Export Successful",
+                    f"Session exported successfully!\n\n{file_path}",
+                )
+            else:
+                raise Exception("Failed to create ZIP file")
+
+        except Exception as e:
+            print(f"❌ Export failed: {e}")
+            QMessageBox.critical(
+                None, "Export Failed", f"Failed to export session:\n{str(e)}"
+            )
 
     def cleanup(self):
         print("Performing cleanup...")

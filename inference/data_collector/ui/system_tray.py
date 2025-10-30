@@ -11,6 +11,7 @@ class SystemTray(QObject):
 
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
+    export_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -39,6 +40,11 @@ class SystemTray(QObject):
         self.stop_action.triggered.connect(self.stop_requested.emit)
         self.stop_action.setVisible(False)
         self.menu.addAction(self.stop_action)
+
+        self.menu.addSeparator()
+        self.export_action = QAction("📦 Export Last Session")
+        self.export_action.triggered.connect(self.export_requested.emit)
+        self.menu.addAction(self.export_action)
 
         self.menu.addSeparator()
         self.about_action = QAction("ℹ️ About")

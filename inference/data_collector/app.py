@@ -22,6 +22,7 @@ class SystemTrayApp(QObject):
 
         self.tray.start_requested.connect(self.on_start_request)
         self.tray.stop_requested.connect(self.controller.stop_session)
+        self.tray.export_requested.connect(self.controller.export_last_session)
 
         self.controller.state_changed.connect(self.tray.update_state)
 
