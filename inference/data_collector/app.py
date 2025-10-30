@@ -72,25 +72,77 @@ class GazeDataCollectionApp(QObject):
         self.window.on_collection_time_update(self.collection_elapsed)
 
     def _on_export_requested(self):
-        """Handle upload request (zips and shows TODO for upload)."""
+        """Handle upload request (zips and uploads to R2)."""
+        import os
+
         from PyQt6.QtWidgets import QMessageBox
+
+        from data_collector import config
+        from data_collector.utils.r2_uploader import R2UploadManager
 
         self.window.on_export_started()
 
         # Zip the session data
         zip_path = self.controller.data_manager.export_session_as_zip()
 
-        if zip_path and zip_path.exists():
-            # Show TODO message for server upload
-            QMessageBox.information(
-                self.window,
-                "TODO: Upload Implementation",
-                f"Session has been zipped to:\n{zip_path}\n\n"
-                "Server upload will be implemented later.",
-            )
-            self.window.on_export_completed()
-        else:
+        if not zip_path or not zip_path.exists():
             QMessageBox.critical(self.window, "Error", "Failed to create ZIP file.")
+            return
+
+        # Get R2 credentials from environment
+        access_key = os.getenv("R2_ACCESS_KEY_ID")
+        secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
+
+        if not access_key or not secret_key:
+            QMessageBox.critical(
+                self.window,
+                "Upload Error",
+                "R2 credentials not found.\n\n"
+                "Please set R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables.",
+            )
+            return
+
+        # Upload to R2
+        try:
+            uploader = R2UploadManager(
+                access_key,
+                secret_key,
+                config.R2_ENDPOINT_URL,
+                config.R2_BUCKET_NAME,
+            )
+
+            # Authenticate
+            if not uploader.authenticate():
+                QMessageBox.critical(
+                    self.window,
+                    "Upload Error",
+                    "Failed to authenticate with R2.\n\n"
+                    "Please check your credentials and bucket configuration.",
+                )
+                return
+
+            # Upload file
+            print(f"Uploading {zip_path.name} to R2...")
+            file_url = uploader.upload_file(str(zip_path))
+
+            if file_url:
+                QMessageBox.information(
+                    self.window,
+                    "Upload Successful",
+                    f"Data uploaded successfully!\n\n"
+                    f"File: {zip_path.name}\n"
+                    f"Uploaded to R2 bucket: {config.R2_BUCKET_NAME}",
+                )
+                self.window.on_export_completed()
+            else:
+                QMessageBox.critical(
+                    self.window, "Upload Error", "Failed to upload file to R2."
+                )
+
+        except Exception as e:
+            QMessageBox.critical(
+                self.window, "Upload Error", f"Upload failed:\n{str(e)}"
+            )
 
     def _on_restart(self):
         """Handle restart request."""

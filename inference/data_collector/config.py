@@ -18,6 +18,12 @@ DATA_OUTPUT_DIR = PROJECT_ROOT / "collected_data"
 VIDEO_FPS = 30  # The target FPS for the output video file
 BENCHMARK_FRAMES = 100  # Number of frames to process for FPS calculation
 
+# R2 (Cloudflare) Upload Configuration
+R2_ENDPOINT_URL = "https://6e4e2c5c3f487a52988adf2a46fe200f.r2.cloudflarestorage.com"
+R2_BUCKET_NAME = "gaze-estimation-research"
+# Credentials should be set via environment variables:
+# R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY
+
 CAMERA_ID = 0  # Default webcam
 DESIRED_CAMERA_RESOLUTION = (1280, 720)  # Width, Height
 

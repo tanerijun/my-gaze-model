@@ -48,6 +48,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# R2 credentials (use .env file)
+.env
+gaze-drive-credentials.json
+
 # Rope project settings
 .ropeproject
 
