@@ -1,10 +1,40 @@
 import sys
 
-from PyQt6.QtCore import QObject, QTimer
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QApplication
 
 from data_collector.core.app_controller import AppController, AppState
 from data_collector.ui.main_window import MainWindow
+
+
+class UploadWorker(QThread):
+    """Worker thread for uploading files to R2 with progress reporting."""
+
+    progress_updated = pyqtSignal(int, int)  # current_bytes, total_bytes
+    upload_completed = pyqtSignal(str)  # file_url
+    upload_failed = pyqtSignal(str)  # error_message
+
+    def __init__(self, uploader, file_path):
+        super().__init__()
+        self.uploader = uploader
+        self.file_path = file_path
+
+    def run(self):
+        """Execute upload in background thread."""
+        try:
+
+            def progress_callback(current, total):
+                self.progress_updated.emit(current, total)
+
+            file_url = self.uploader.upload_file(self.file_path, progress_callback)
+
+            if file_url:
+                self.upload_completed.emit(file_url)
+            else:
+                self.upload_failed.emit("Upload failed - no URL returned")
+
+        except Exception as e:
+            self.upload_failed.emit(str(e))
 
 
 class GazeDataCollectionApp(QObject):
@@ -83,9 +113,6 @@ class GazeDataCollectionApp(QObject):
 
         from PyQt6.QtWidgets import QMessageBox
 
-        from data_collector import config
-        from data_collector.utils.r2_uploader import R2UploadManager
-
         self.window.on_export_started()
 
         # Zip the session data
@@ -109,6 +136,16 @@ class GazeDataCollectionApp(QObject):
             return
 
         # Upload to R2
+        self._attempt_upload(zip_path, access_key, secret_key)
+
+    def _attempt_upload(self, zip_path, access_key, secret_key, retry_count=0):
+        """Attempt to upload with error handling and retry capability."""
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QMessageBox, QProgressDialog
+
+        from data_collector import config
+        from data_collector.utils.r2_uploader import R2UploadManager
+
         try:
             uploader = R2UploadManager(
                 access_key,
@@ -119,42 +156,68 @@ class GazeDataCollectionApp(QObject):
 
             # Authenticate
             if not uploader.authenticate():
-                QMessageBox.critical(
+                reply = QMessageBox.critical(
                     self.window,
                     "Upload Error",
                     "Failed to authenticate with R2.\n\n"
-                    "Please check your credentials and bucket configuration.",
+                    "Please check your credentials and bucket configuration.\n\n"
+                    "Would you like to retry?",
+                    QMessageBox.StandardButton.Retry
+                    | QMessageBox.StandardButton.Cancel,
                 )
+                if reply == QMessageBox.StandardButton.Retry:
+                    self._attempt_upload(
+                        zip_path, access_key, secret_key, retry_count + 1
+                    )
                 return
 
             # Show progress dialog
-            from PyQt6.QtCore import Qt
-            from PyQt6.QtWidgets import QProgressDialog
-
             progress = QProgressDialog(
-                "Uploading data to server...",
-                None,  # No cancel button
+                "Preparing upload...",
+                "Cancel",
                 0,
                 100,
                 self.window,
             )
-            progress.setWindowTitle("Uploading")
+            progress.setWindowTitle("Uploading to R2")
             progress.setWindowModality(Qt.WindowModality.WindowModal)
-            progress.setMinimumDuration(0)  # Show immediately
+            progress.setMinimumDuration(0)
             progress.setValue(0)
             progress.show()
-            QApplication.processEvents()
 
-            # Upload file - don't use callback, just show indeterminate progress
-            print(f"Uploading {zip_path.name} to R2...")
+            # Track if upload was cancelled
+            upload_cancelled = False
 
-            # Use a simple approach: just show the dialog and upload
-            file_url = uploader.upload_file(str(zip_path), progress_callback=None)
+            def on_cancel():
+                nonlocal upload_cancelled
+                upload_cancelled = True
+                if hasattr(self, "_upload_worker") and self._upload_worker.isRunning():
+                    self._upload_worker.terminate()
+                    self._upload_worker.wait()
 
-            progress.setValue(100)
-            progress.close()
+            progress.canceled.connect(on_cancel)
 
-            if file_url:
+            # Create and start upload worker
+            self._upload_worker = UploadWorker(uploader, str(zip_path))
+
+            # Connect signals
+            def update_progress(current, total):
+                if upload_cancelled:
+                    return
+                percentage = int((current / total) * 100) if total > 0 else 0
+                progress.setValue(percentage)
+                # Format bytes nicely
+                current_mb = current / (1024 * 1024)
+                total_mb = total / (1024 * 1024)
+                progress.setLabelText(
+                    f"Uploading {zip_path.name}...\n"
+                    f"{current_mb:.1f} MB / {total_mb:.1f} MB ({percentage}%)"
+                )
+
+            def on_completed(file_url):
+                if upload_cancelled:
+                    return
+                progress.close()
                 QMessageBox.information(
                     self.window,
                     "Upload Successful",
@@ -163,15 +226,40 @@ class GazeDataCollectionApp(QObject):
                     f"Uploaded to R2 bucket: {config.R2_BUCKET_NAME}",
                 )
                 self.window.on_export_completed()
-            else:
-                QMessageBox.critical(
-                    self.window, "Upload Error", "Failed to upload file to R2."
+
+            def on_failed(error_message):
+                if upload_cancelled:
+                    progress.close()
+                    return
+                progress.close()
+                reply = QMessageBox.critical(
+                    self.window,
+                    "Upload Error",
+                    f"Upload failed:\n{error_message}\n\nWould you like to retry?",
+                    QMessageBox.StandardButton.Retry
+                    | QMessageBox.StandardButton.Cancel,
                 )
+                if reply == QMessageBox.StandardButton.Retry:
+                    self._attempt_upload(
+                        zip_path, access_key, secret_key, retry_count + 1
+                    )
+
+            self._upload_worker.progress_updated.connect(update_progress)
+            self._upload_worker.upload_completed.connect(on_completed)
+            self._upload_worker.upload_failed.connect(on_failed)
+
+            print(f"Starting upload of {zip_path.name} to R2...")
+            self._upload_worker.start()
 
         except Exception as e:
-            QMessageBox.critical(
-                self.window, "Upload Error", f"Upload failed:\n{str(e)}"
+            reply = QMessageBox.critical(
+                self.window,
+                "Upload Error",
+                f"Failed to initialize upload:\n{str(e)}\n\nWould you like to retry?",
+                QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
             )
+            if reply == QMessageBox.StandardButton.Retry:
+                self._attempt_upload(zip_path, access_key, secret_key, retry_count + 1)
 
     def _on_restart(self):
         """Handle restart request."""

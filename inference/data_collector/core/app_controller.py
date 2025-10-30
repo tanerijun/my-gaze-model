@@ -106,7 +106,7 @@ class AppController(QObject):
         super().__init__()
         self.state = AppState.IDLE
         self.session_metadata = {}
-        self.participant_name = None
+        self.participant_name: str | None = None
 
         self.benchmark_frame_count = 0
         self.benchmark_start_time = 0.0
