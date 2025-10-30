@@ -13,6 +13,7 @@ dependencies = [
     "pandas>=2.3.2",
     "psutil>=7.1.0",
     "py-cpuinfo>=9.0.0",
+    "pynput>=1.7.6",
     "pyqt6>=6.9.1",
     "requests>=2.31.0",
     "scikit-learn>=1.7.1",

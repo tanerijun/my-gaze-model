@@ -1,8 +1,10 @@
 import datetime
+import random
 from enum import Enum, auto
 from queue import Queue
 
 import numpy as np
+from pynput import mouse
 from PyQt6.QtCore import (
     Q_ARG,
     QMetaObject,
@@ -65,15 +67,12 @@ def _filter_gaze_result(gaze_result):
     # Only keep the fields we care about
     filtered = {}
 
-    # Keep gaze angles (pitch, yaw, roll)
+    # Keep gaze angles (pitch and yaw only, not roll)
     if "gaze" in gaze_result:
         filtered["gaze"] = {
             "pitch": gaze_result["gaze"].get("pitch"),
             "yaw": gaze_result["gaze"].get("yaw"),
-            "roll": gaze_result["gaze"].get("roll"),
-        }
-
-    # Keep eye-related measurements
+        }  # Keep eye-related measurements
     if "eye_distance" in gaze_result:
         filtered["eye_distance"] = gaze_result["eye_distance"]
 
@@ -145,6 +144,23 @@ class AppController(QObject):
         self.storage_worker = StorageWorker(self.video_queue)
         self.storage_worker.moveToThread(self.storage_thread)
         self.start_recording_signal.connect(self.storage_worker.setup_and_run)
+
+        # --- Setup Explicit Point Timer ---
+        self.explicit_point_timer = QTimer()
+        self.explicit_point_timer.timeout.connect(self._show_explicit_point)
+        self.explicit_point_timer.setSingleShot(
+            True
+        )  # Only fire once, then restart manually
+        self.explicit_point_timer.setInterval(
+            config.EXPLICIT_POINT_INTERVAL_SECONDS * 1000
+        )  # Convert to milliseconds
+
+        # Track whether we're waiting for explicit point click
+        self.waiting_for_explicit_click = False
+        self.current_explicit_point = None
+
+        # --- Setup Implicit Click Listener ---
+        self.mouse_listener = None  # Will be created when collection starts
 
         print("AppController initialized.")
 
@@ -292,6 +308,13 @@ class AppController(QObject):
             self.overlay.close()
             QApplication.processEvents()
 
+        # Stop explicit point timer
+        if hasattr(self, "explicit_point_timer"):
+            self.explicit_point_timer.stop()
+
+        # Stop implicit click listener
+        self._stop_implicit_click_listener()
+
         # Signal all workers to stop
         self.camera_worker.stop()
         self.inference_worker.stop()
@@ -431,10 +454,14 @@ class AppController(QObject):
 
     @pyqtSlot(int, int)
     def on_calibration_point_clicked(self, x: int, y: int):
-        """Handles a click on the calibration overlay during calibration."""
-        if self.state != AppState.CALIBRATING:
-            return
+        """Handles a click on the calibration overlay during calibration or explicit points."""
+        if self.state == AppState.CALIBRATING:
+            self._handle_calibration_click(x, y)
+        elif self.state == AppState.COLLECTING and self.waiting_for_explicit_click:
+            self._on_explicit_point_clicked(x, y)
 
+    def _handle_calibration_click(self, x: int, y: int):
+        """Handle a click during calibration phase."""
         print(f"\nCalibration point clicked at ({x}, {y})")
 
         # Get the current target point
@@ -521,6 +548,17 @@ class AppController(QObject):
         QApplication.processEvents()  # Force process pending events
         self._set_state(AppState.COLLECTING)
         print("Transitioning to data collection...")
+
+        # Start explicit point timer
+        self.explicit_point_timer.start()
+        print(
+            f"Explicit point timer started (interval: {config.EXPLICIT_POINT_INTERVAL_SECONDS}s)"
+        )
+
+        # Start implicit click listener if enabled
+        if config.ENABLE_IMPLICIT_CLICKS:
+            self._start_implicit_click_listener()
+            print("Implicit click listener started")
 
     def _finish_calibration(self):
         """Completes the calibration phase."""
@@ -650,6 +688,151 @@ class AppController(QObject):
             )
 
         return False, ""
+
+    # --- Continuous Collection Methods ---
+
+    def _show_explicit_point(self):
+        """Show a random explicit calibration point during data collection."""
+        if self.state != AppState.COLLECTING:
+            return
+
+        # Don't show a new point if we're still waiting for the previous one
+        if self.waiting_for_explicit_click:
+            return
+
+        # Generate a random point on the screen
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return
+
+        width = screen.size().width()
+        height = screen.size().height()
+
+        # Use margins similar to calibration grid
+        margin_h = 0.04
+        margin_v = 0.08
+
+        x = int(random.uniform(width * margin_h, width * (1 - margin_h)))
+        y = int(random.uniform(height * margin_v, height * (1 - margin_v)))
+
+        self.current_explicit_point = (x, y)
+        self.waiting_for_explicit_click = True
+
+        # Show the point on overlay
+        self.overlay.clear_calibration_point()
+        self.overlay.clear_central_message()
+        self.overlay.show_instruction_text(False)
+        self.overlay.set_calibration_point(x, y)
+        self.overlay.show_as_overlay()
+
+        print(f"\nExplicit point shown at ({x}, {y})")
+
+    def _on_explicit_point_clicked(self, click_x: int, click_y: int):
+        """Handle click on explicit calibration point during data collection."""
+        if not self.waiting_for_explicit_click or not self.current_explicit_point:
+            return
+
+        target_x, target_y = self.current_explicit_point
+
+        # Get the most recent gaze result
+        gaze_result = getattr(self, "last_gaze_result", None)
+        gaze_result_serializable = _filter_gaze_result(gaze_result)
+
+        # Calculate video timestamp
+        video_timestamp = (
+            datetime.datetime.now() - self.video_start_time
+        ).total_seconds()
+
+        # Save to data manager
+        self.data_manager.add_explicit_click(
+            target_x=target_x,
+            target_y=target_y,
+            click_x=click_x,
+            click_y=click_y,
+            gaze_result=gaze_result_serializable,  # type: ignore
+            video_timestamp=video_timestamp,
+        )
+
+        print(f"Explicit point clicked at ({click_x}, {click_y})")
+
+        # Hide the overlay after a brief delay
+        QTimer.singleShot(200, self._hide_explicit_point)
+
+    def _hide_explicit_point(self):
+        """Hide the explicit point after it's been clicked."""
+        self.overlay.close()
+        self.waiting_for_explicit_click = False
+        self.current_explicit_point = None
+
+        # Restart the timer for the next explicit point
+        if self.state == AppState.COLLECTING:
+            self.explicit_point_timer.start()
+            print(
+                f"Next explicit point will appear in {config.EXPLICIT_POINT_INTERVAL_SECONDS}s"
+            )
+
+    def _start_implicit_click_listener(self):
+        """Start listening for mouse clicks anywhere on the screen."""
+        if self.mouse_listener is not None:
+            return  # Already running
+
+        def on_click(x, y, button, pressed):
+            """Callback for mouse clicks. Runs in pynput's thread."""
+            if pressed and button == mouse.Button.left:
+                # Use QMetaObject.invokeMethod to safely call from non-Qt thread
+                QMetaObject.invokeMethod(
+                    self,
+                    "_handle_implicit_click",
+                    Qt.ConnectionType.QueuedConnection,
+                    Q_ARG(int, int(x)),
+                    Q_ARG(int, int(y)),
+                )
+
+        self.mouse_listener = mouse.Listener(on_click=on_click)
+        self.mouse_listener.start()
+
+    def _stop_implicit_click_listener(self):
+        """Stop the implicit click listener."""
+        if self.mouse_listener is not None:
+            self.mouse_listener.stop()
+            self.mouse_listener = None
+
+    @pyqtSlot(int, int)
+    def _handle_implicit_click(self, x: int, y: int):
+        """Handle an implicit click from the mouse listener (called from Qt main thread)."""
+        # Only record implicit clicks during COLLECTING state (not during drift pause)
+        if self.state != AppState.COLLECTING:
+            return
+
+        # Don't record the click if it's on an explicit point
+        if self.waiting_for_explicit_click:
+            return
+
+        # Get the most recent gaze result
+        gaze_result = getattr(self, "last_gaze_result", None)
+        gaze_result_serializable = _filter_gaze_result(gaze_result)
+
+        # Calculate video timestamp
+        video_timestamp = (
+            datetime.datetime.now() - self.video_start_time
+        ).total_seconds()
+
+        # Save to data manager
+        self.data_manager.add_implicit_click(
+            click_x=x,
+            click_y=y,
+            gaze_result=gaze_result_serializable,  # type: ignore
+            video_timestamp=video_timestamp,
+        )
+
+        # Print occasionally to avoid spam (every 10th click)
+        implicit_count = len(
+            self.data_manager.session_data.get("click_events", {}).get(
+                "implicit_clicks", []
+            )
+        )
+        if implicit_count % 10 == 0:
+            print(f"Implicit clicks recorded: {implicit_count}")
 
     @pyqtSlot()
     def on_calibration_cancelled(self):
