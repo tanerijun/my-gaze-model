@@ -19,7 +19,12 @@ from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from data_collector import config
 from data_collector.core.data_manager import DataManager
-from data_collector.core.workers import CameraWorker, InferenceWorker, StorageWorker
+from data_collector.core.workers import (
+    CameraWorker,
+    InferenceWorker,
+    ScreenRecorder,
+    StorageWorker,
+)
 from data_collector.ui.calibration_overlay import CalibrationOverlay
 from data_collector.utils.system_info import get_system_info
 
@@ -144,6 +149,10 @@ class AppController(QObject):
         self.storage_worker = StorageWorker(self.video_queue)
         self.storage_worker.moveToThread(self.storage_thread)
         self.start_recording_signal.connect(self.storage_worker.setup_and_run)
+
+        # --- Setup Screen Recorder & Thread ---
+        self.screen_thread = QThread()
+        self.screen_recorder = None  # Created when session starts
 
         # --- Setup Explicit Point Timer ---
         self.explicit_point_timer = QTimer()
@@ -319,9 +328,14 @@ class AppController(QObject):
         self.camera_worker.stop()
         self.inference_worker.stop()
         self.storage_worker.stop()
+        if self.screen_recorder:
+            self.screen_recorder.stop()
 
         # Quit the threads and wait for them to finish
-        for thread in [self.camera_thread, self.inference_thread, self.storage_thread]:
+        threads = [self.camera_thread, self.inference_thread, self.storage_thread]
+        if self.screen_thread.isRunning():
+            threads.append(self.screen_thread)
+        for thread in threads:
             if thread.isRunning():
                 thread.quit()
                 thread.wait()
@@ -394,14 +408,32 @@ class AppController(QObject):
         # Use the session_id from data_manager to ensure consistency
         session_id = self.data_manager.session_id
         video_filename = f"session_{session_id}.mp4"
+        screen_filename = f"session_{session_id}_screen.mp4"
         session_dir = config.DATA_OUTPUT_DIR / f"session_{session_id}"
         output_path = str(session_dir / video_filename)
+        screen_output_path = str(session_dir / screen_filename)
 
-        # Store video filename in data manager
+        # Store video filenames in data manager
         self.data_manager.set_video_filename(video_filename)
+        # Also store screen recording filename in session metadata
+        if "video_files" not in self.session_metadata:
+            self.session_metadata["video_files"] = {}
+        self.session_metadata["video_files"]["webcam"] = video_filename
+        self.session_metadata["video_files"]["screen"] = screen_filename
 
+        # Start webcam recording
         self.start_recording_signal.emit(output_path, width, height, config.VIDEO_FPS)
         self.camera_worker.camera_started.disconnect(self.on_camera_ready_for_recording)
+
+        # Start screen recording
+        self.screen_recorder = ScreenRecorder(screen_output_path, config.VIDEO_FPS)
+        self.screen_recorder.moveToThread(self.screen_thread)
+        self.screen_thread.started.connect(self.screen_recorder.run)
+        self.screen_recorder.recording_error.connect(
+            lambda msg: print(f"Screen recording error: {msg}")
+        )
+        self.screen_thread.start()
+        print(f"Screen recording will be saved to: {screen_filename}")
 
     @pyqtSlot(list)
     def on_new_result(self, results: list):

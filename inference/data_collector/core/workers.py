@@ -232,3 +232,98 @@ class StorageWorker(QObject):
         """Signals the worker to finish up and stop."""
         print("Storage worker received stop signal.")
         self._is_running = False
+
+
+class ScreenRecorder(QObject):
+    """
+    Records the entire screen in a separate thread.
+    Saves screen recording to a video file.
+    """
+
+    recording_started = pyqtSignal(int, int)  # emits width, height
+    recording_finished = pyqtSignal(str)  # emits output path
+    recording_error = pyqtSignal(str)
+
+    def __init__(self, output_path: str, fps: int = 30):
+        super().__init__()
+        self.output_path = output_path
+        self.fps = fps
+        self._is_running = False
+        self.video_writer = None
+
+    @pyqtSlot()
+    def run(self):
+        """Starts the screen recording loop."""
+        try:
+            import mss
+            import mss.tools
+        except ImportError:
+            self.recording_error.emit(
+                "mss library not installed. Install with: uv add mss"
+            )
+            return
+
+        with mss.mss() as sct:
+            # Get the primary monitor
+            monitor = sct.monitors[1]  # Monitor 1 is the primary display
+            width = monitor["width"]
+            height = monitor["height"]
+
+            # Setup video writer
+            fourcc = cv2.VideoWriter_fourcc(*"avc1")  # type: ignore
+            self.video_writer = cv2.VideoWriter(
+                self.output_path, fourcc, self.fps, (width, height)
+            )
+
+            # Fallback to mp4v if avc1 fails
+            if not self.video_writer.isOpened():
+                print("AVC1 codec failed, trying MP4V...")
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")  # type: ignore
+                self.video_writer = cv2.VideoWriter(
+                    self.output_path, fourcc, self.fps, (width, height)
+                )
+
+            if not self.video_writer.isOpened():
+                self.recording_error.emit(
+                    f"Could not open video writer for screen recording: {self.output_path}"
+                )
+                return
+
+            self.recording_started.emit(width, height)
+            print(f"Screen recording started: {width}x{height} at {self.fps} FPS")
+            print(f"Saving to: {self.output_path}")
+
+            self._is_running = True
+            frame_time = 1.0 / self.fps
+
+            while self._is_running:
+                start_time = time.time()
+
+                # Capture screen
+                screenshot = sct.grab(monitor)
+
+                # Convert to numpy array (BGR format for OpenCV)
+                frame = np.array(screenshot)
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+                # Write frame
+                self.video_writer.write(frame)
+
+                # Maintain target FPS
+                elapsed = time.time() - start_time
+                sleep_time = frame_time - elapsed
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+
+            # Cleanup
+            if self.video_writer:
+                self.video_writer.release()
+            self.video_writer = None
+
+            print(f"Screen recording saved: {self.output_path}")
+            self.recording_finished.emit(self.output_path)
+
+    def stop(self):
+        """Signals the worker to stop recording."""
+        print("Screen recorder received stop signal.")
+        self._is_running = False
