@@ -8,10 +8,12 @@ Shows a clear step-by-step workflow with visual progress indicators.
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -254,7 +256,7 @@ class MainWindow(QWidget):
         main_layout.setContentsMargins(30, 30, 30, 30)
 
         # Header
-        header = QLabel("👁️ Gaze Data Collection")
+        header = QLabel("Gaze Data Collection")
         header_font = QFont()
         header_font.setPointSize(24)
         header_font.setBold(True)
@@ -545,12 +547,25 @@ Uploads all your collected data to the research server.</p>
 <br>• Any personal information</p>
         """
 
-        help_dialog = QMessageBox(self)
-        help_dialog.setWindowTitle("Help")
-        help_dialog.setTextFormat(Qt.TextFormat.RichText)
-        help_dialog.setText(help_text)
-        help_dialog.setIcon(QMessageBox.Icon.Information)
-        help_dialog.exec()
+        # Create custom dialog
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Help")
+        dialog.setGeometry(100, 100, 700, 600)  # width, height
+
+        layout = QVBoxLayout(dialog)
+
+        # Text display
+        text_display = QTextEdit(dialog)
+        text_display.setHtml(help_text)
+        text_display.setReadOnly(True)
+        layout.addWidget(text_display)
+
+        # Close button
+        close_button = QPushButton("Close")
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+
+        dialog.exec()
 
     @pyqtSlot(str)
     def show_error(self, message: str):

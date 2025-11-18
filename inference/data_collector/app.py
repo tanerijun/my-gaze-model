@@ -61,6 +61,7 @@ class GazeDataCollectionApp(QObject):
         # Note: collection starts automatically after calibration
         self.window.stop_collection_requested.connect(self._on_stop_collection)
         self.window.export_requested.connect(self._on_export_requested)
+        self.window.help_requested.connect(self.window.show_help_dialog)
         self.window.restart_requested.connect(self._on_restart)
 
         # Connect controller signals to UI
