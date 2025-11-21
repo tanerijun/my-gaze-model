@@ -3,6 +3,77 @@ Main Window UI for Gaze Data Collection
 
 A simple, guided interface for non-technical users to collect gaze data.
 Shows a clear step-by-step workflow with visual progress indicators.
+
+⚠️ NOTE: This file is currently UNUSED in the application.
+The app now uses menu_bar_app.py as the primary interface.
+This file is kept for reference and can be reconnected if needed.
+
+HOW TO RECONNECT THIS WINDOW:
+================================
+
+1. In `data_collector/app.py`, restore the MainWindow:
+
+   # Add import at top:
+   from data_collector.ui.main_window import MainWindow
+
+   # In GazeDataCollectionApp.__init__(), add:
+   self.window = MainWindow()
+
+   # Connect window signals:
+   self.window.benchmark_requested.connect(self._on_benchmark_requested)
+   self.window.calibration_requested.connect(self.controller.start_data_collection)
+   self.window.stop_collection_requested.connect(self._on_stop_collection)
+   self.window.export_requested.connect(self._on_export_requested)
+   self.window.help_requested.connect(self.window.show_help_dialog)
+   self.window.restart_requested.connect(self._on_restart)
+
+   # Connect controller to window:
+   self.controller.state_changed.connect(self._on_state_changed)
+
+   # Show window in run():
+   def run(self):
+       self.window.show()
+       return self.app.exec()
+
+2. In `data_collector/app.py`, add back the handler methods:
+   - _on_benchmark_requested()
+   - _on_state_changed(state: AppState)
+   - _on_stop_collection()
+   - _on_export_requested()
+   - _attempt_upload()
+   - _update_collection_timer()
+
+   See git history (before menu bar changes) for full implementation.
+
+3. In `menu_bar_app.py`, you can add back the "Show Window" menu option:
+
+   # Pass window to MenuBarApp:
+   self.menu_bar = MenuBarApp(controller=self.controller, main_window=self.window)
+
+   # In menu_bar_app.py, add menu action:
+   self.show_window_action = QAction("🪟 Show Window")
+   self.show_window_action.triggered.connect(self._on_show_window)
+
+   def _on_show_window(self):
+       if self.main_window:
+           self.main_window.show()
+           self.main_window.activateWindow()
+           self.main_window.raise_()
+
+4. Optionally, you can run ONLY the window (no menu bar):
+   - Remove menu_bar creation from app.py
+   - Set app.setQuitOnLastWindowClosed(True)
+   - Show window in run()
+
+WHAT WAS CHANGED:
+=================
+- app.py now uses only MenuBarApp (menu_bar_app.py)
+- Main window is not instantiated or shown
+- All functionality moved to menu bar interface
+- Menu bar shows elapsed time during collection
+- Export is now a mandatory sequential stage (not a menu item)
+- Cross-platform system tray/menu bar interface
+
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal, pyqtSlot
