@@ -504,7 +504,9 @@ class MainWindow(QWidget):
 <h2>📖 Gaze Data Collection Tool - Help</h2>
 
 <h3>What is this tool?</h3>
-<p>This application collects eye gaze tracking data for research purposes.
+<p><b>⚠️ RESEARCH PURPOSE ONLY</b></p>
+<p>This application collects eye gaze tracking data <b>for research purposes only</b>.
+The collected data will be used exclusively for academic research and will not be used for any other purpose.
 It records where you look on the screen while using your computer.</p>
 
 <h3>How to use:</h3>
@@ -515,12 +517,12 @@ This takes about 5 seconds. Just click "Start" and wait.</p>
 
 <p><b>Step 2: Eye Calibration</b><br>
 You'll see 9 dots appear on your screen one by one.
-<br>• Click on each dot when it appears
-<br>• After clicking, press the SPACE bar to continue
-<br>• Try to keep your head still during calibration</p>
+<br>• Click on each dot while looking at the dot.
+<br>• After clicking, rest, then press the SPACE bar to continue.
+<br>• Keep head still during calibration.</p>
 
 <p><b>Step 3: Data Collection</b><br>
-The app will record your gaze while you use your computer normally.
+The app will record your gaze and your screen while you use your computer normally.
 <br>• Use your computer as you normally would
 <br>• Try to keep your head in a similar position as during calibration
 <br>• Random dots may appear occasionally - click on them when they do
@@ -535,16 +537,20 @@ Uploads all your collected data to the research server.</p>
 <br>• Collect data for at least 2-3 minutes for best results
 <br>• If you make a mistake, use the "Restart" button</p>
 
-<h3>Privacy:</h3>
-<p>This tool only records:<br>
+<h3>What is Recorded:</h3>
+<p>This tool records:<br>
 • Video of your face (for gaze estimation)
+<br>• Your screen activity (for gaze research context)
 <br>• Where you click on the screen
 <br>• Eye tracking data (angles and positions)</p>
 
-<p>It does NOT record:<br>
-• Your screen content
-<br>• What programs you're using
-<br>• Any personal information</p>
+<h3>Privacy & Research Use:</h3>
+<p><b>Important:</b> All collected data is for research purposes only.
+<br>• Your data will only be used for academic research
+<br>• Data will not be shared for commercial purposes
+<br>• Data will not be used for any surveillance or non-research activities</p>
+
+<p>By participating, you consent to the collection of your face video and screen recording for research purposes.</p>
         """
 
         # Create custom dialog
