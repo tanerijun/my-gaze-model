@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import QApplication
 
 from data_collector.core.app_controller import AppController
 from data_collector.ui.menu_bar_app import MenuBarApp
-from data_collector.utils.accessibility_check import log_accessibility_status
 
 
 class UploadWorker(QThread):
@@ -47,7 +46,9 @@ class GazeDataCollectionApp(QObject):
         super().__init__()
 
         # Check accessibility permissions before creating UI
-        log_accessibility_status()
+        # currently unreliable during dev (might need to give accessibility access to Python too)
+        # TODO: try again for packaged version of the app
+        # log_accessibility_status()
 
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)

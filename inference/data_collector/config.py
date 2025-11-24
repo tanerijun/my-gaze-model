@@ -29,9 +29,9 @@ DESIRED_CAMERA_RESOLUTION = (1280, 720)  # Width, Height
 
 # Head Pose Drift Detection Thresholds
 DRIFT_THRESHOLDS = {
-    "roll_degrees": 20.0,  # Maximum roll deviation in degrees
-    "eye_distance_ratio": 0.25,  # Maximum IPD change ratio (e.g., 0.25 = 25%)
-    "eye_center_shift_pixels": 50.0,  # Maximum eye center position shift in pixels
+    "roll_degrees": 10.0,  # Maximum roll deviation in degrees
+    "eye_distance_ratio": 0.15,  # Maximum IPD change ratio (e.g., 0.15 = 15%)
+    "eye_center_shift_normalized": 0.05,  # Maximum eye center position shift (normalized, 0.05 = 5% of frame)
 }
 
 # Continuous Collection Settings

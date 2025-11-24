@@ -72,21 +72,21 @@ def _filter_gaze_result(gaze_result):
     # Only keep the fields we care about
     filtered = {}
 
-    # Keep gaze angles (pitch and yaw only, not roll)
+    # Keep gaze angles (pitch and yaw)
     if "gaze" in gaze_result:
         filtered["gaze"] = {
             "pitch": gaze_result["gaze"].get("pitch"),
             "yaw": gaze_result["gaze"].get("yaw"),
-        }  # Keep eye-related measurements
-    if "eye_distance" in gaze_result:
-        filtered["eye_distance"] = gaze_result["eye_distance"]
+        }
 
-    if "eye_center" in gaze_result:
-        filtered["eye_center"] = gaze_result["eye_center"]
-
-    # Keep face bbox for reference
-    if "face_bbox" in gaze_result:
-        filtered["face_bbox"] = gaze_result["face_bbox"]
+    # Extract head pose from gaze_origin_features (derived from BlazeFace landmarks)
+    # Collected for analysis - will filter outliers during post-processing
+    if "gaze_origin_features" in gaze_result:
+        features = gaze_result["gaze_origin_features"]
+        filtered["eye_center_x"] = features.get("eye_center_x")
+        filtered["eye_center_y"] = features.get("eye_center_y")
+        filtered["eye_distance"] = features.get("ipd")
+        filtered["roll"] = features.get("roll_angle")
 
     # Convert to JSON-serializable format
     return _make_json_serializable(filtered)
@@ -455,30 +455,18 @@ class AppController(QObject):
         elif self.state == AppState.COLLECTING:
             gaze = results[0]["gaze"]
 
-            # Check for head pose drift
-            is_drifted, drift_message = self._check_head_pose_drift(results[0])
-
-            if is_drifted:
-                # Pause collection and show warning
-                self._set_state(AppState.PAUSED_BY_DRIFT)
-                # Clear all previous overlay messages first
-                self.overlay.clear_calibration_point()
-                self.overlay.clear_central_message()
-                self.overlay.show_instruction_text(False)
-                # Show warning message
-                self.overlay.set_warning_message(
-                    drift_message + "\n\nPlease return to your original position"
-                )
-                self.overlay.show_as_overlay()
-                print(f"\n{drift_message} - Data collection paused")
+            # Check for head pose drift (currently disabled)
+            # is_drifted, drift_message = self._check_head_pose_drift(results[0])
+            is_drifted = False
 
             print(
                 f"Gaze Result: Pitch={gaze['pitch']:.1f}, Yaw={gaze['yaw']:.1f}",
                 end="\r",
             )
         elif self.state == AppState.PAUSED_BY_DRIFT:
-            # Check if user has returned to acceptable pose
-            is_drifted, _ = self._check_head_pose_drift(results[0])
+            # Check if user has returned to acceptable pose (currently disabled)
+            # is_drifted, _ = self._check_head_pose_drift(results[0])
+            is_drifted = True
 
             if not is_drifted:
                 # Resume collection
@@ -516,12 +504,12 @@ class AppController(QObject):
             {
                 "target": (target_x, target_y),
                 "click": (x, y),
-                "gaze_result": gaze_result,  # Keep original for drift calculation
+                "gaze_result": gaze_result_serializable,
                 "timestamp": datetime.datetime.now().isoformat(),
             }
         )
 
-        # Save to data manager (use serializable version)
+        # Save to data manager
         self.data_manager.add_calibration_point(
             target_x=target_x,
             target_y=target_y,
@@ -626,27 +614,18 @@ class AppController(QObject):
         """Average multiple gaze results to get a baseline head pose."""
         avg_pose = {}
         if gaze_results:
-            # Extract only the features we care about for drift detection
-            rolls = [
-                r["gaze"]["roll"]
-                for r in gaze_results
-                if "gaze" in r and "roll" in r["gaze"]
-            ]
+            # Average measurements from gaze_origin_features
+            rolls = [r["roll"] for r in gaze_results if "roll" in r]
             eye_distances = [
                 r["eye_distance"] for r in gaze_results if "eye_distance" in r
             ]
             eye_centers_x = [
-                r["eye_center"][0]
-                for r in gaze_results
-                if "eye_center" in r and len(r["eye_center"]) >= 2
+                r["eye_center_x"] for r in gaze_results if "eye_center_x" in r
             ]
             eye_centers_y = [
-                r["eye_center"][1]
-                for r in gaze_results
-                if "eye_center" in r and len(r["eye_center"]) >= 2
+                r["eye_center_y"] for r in gaze_results if "eye_center_y" in r
             ]
 
-            # Calculate averages
             avg_pose["roll"] = sum(rolls) / len(rolls) if rolls else 0.0
             avg_pose["eye_distance"] = (
                 sum(eye_distances) / len(eye_distances) if eye_distances else 0.0
@@ -666,49 +645,27 @@ class AppController(QObject):
         """
         Check if the current head pose has drifted too far from baseline.
 
-        Args:
-            current_result: Current gaze result dictionary
-
-        Returns:
-            (is_drifted, message): Tuple of boolean and warning message
+        Currently unused - thresholds are difficult to adjust reliably in real-time.
+        Head pose data (roll, eye_center_x, eye_center_y, eye_distance) is collected
+        for each click and can be filtered during post-processing analysis.
         """
         if not hasattr(self, "baseline_head_pose") or not self.baseline_head_pose:
             return False, ""
 
         baseline = self.baseline_head_pose
-        current_gaze = current_result.get("gaze", {})
-        current_eye_dist = current_result.get("eye_distance", 0.0)
-        current_eye_center = current_result.get("eye_center", [0.0, 0.0])
+        current_eye_center_x = current_result.get("eye_center_x", 0.0)
+        current_eye_center_y = current_result.get("eye_center_y", 0.0)
+        current_roll = current_result.get("roll", 0.0)
 
         # Check roll drift
-        roll_diff = abs(current_gaze.get("roll", 0.0) - baseline.get("roll", 0.0))
+        baseline_roll = baseline.get("roll", 0.0)
+        roll_diff = abs(current_roll - baseline_roll)
         if roll_diff > config.DRIFT_THRESHOLDS["roll_degrees"]:
             return True, f"⚠️ Head rolled too much (roll: {roll_diff:.1f}°)"
-
-        # Check eye distance (IPD) change - indicates moving closer/farther
-        baseline_eye_dist = baseline.get("eye_distance", 0.0)
-        if baseline_eye_dist > 0:
-            eye_dist_ratio = (
-                abs(current_eye_dist - baseline_eye_dist) / baseline_eye_dist
-            )
-            if eye_dist_ratio > config.DRIFT_THRESHOLDS["eye_distance_ratio"]:
-                direction = (
-                    "closer" if current_eye_dist > baseline_eye_dist else "farther"
-                )
-                return (
-                    True,
-                    f"⚠️ Moved too {direction} from camera ({eye_dist_ratio * 100:.1f}% change)",
-                )
 
         # Check eye center position drift (lateral/vertical head movement)
         baseline_eye_center_x = baseline.get("eye_center_x", 0.0)
         baseline_eye_center_y = baseline.get("eye_center_y", 0.0)
-        current_eye_center_x = (
-            current_eye_center[0] if len(current_eye_center) >= 2 else 0.0
-        )
-        current_eye_center_y = (
-            current_eye_center[1] if len(current_eye_center) >= 2 else 0.0
-        )
 
         # Calculate Euclidean distance of eye center movement
         eye_center_shift = (
@@ -716,10 +673,10 @@ class AppController(QObject):
             + (current_eye_center_y - baseline_eye_center_y) ** 2
         ) ** 0.5
 
-        if eye_center_shift > config.DRIFT_THRESHOLDS["eye_center_shift_pixels"]:
+        if eye_center_shift > config.DRIFT_THRESHOLDS["eye_center_shift_normalized"]:
             return (
                 True,
-                f"⚠️ Head shifted position ({eye_center_shift:.1f} pixels)",
+                f"⚠️ Head shifted position ({eye_center_shift:.3f} normalized)",
             )
 
         return False, ""
