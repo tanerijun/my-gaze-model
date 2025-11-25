@@ -424,9 +424,12 @@ class MenuBarApp(QObject):
             "6. 將資料上傳到伺服器\n\n"
             "在收集期間，每 20 秒出現一次藍點，出現時注視著藍點並點擊。\n"
             "---\n\n"
-            "FAQ:"
-            "Q: Application freeze/crash/hang!"
-            "A: This usually happens when granting new permission access. Just RESTART the app!",
+            "FAQ:\n\n"
+            "Q: Application freeze/crash/hang!\n"
+            "A: This usually happens when granting new permission access. Just RESTART the app!\n\n"
+            "Q: What if I missed the permission granting form?\n"
+            "A: Give permission manually.\n"
+            "\tIn MacOS: Settings -> Privacy & Security -> add app to Accessibility, Input Monitoring, Screen & System Audio Recording",
         )
 
     def _on_quit(self):
