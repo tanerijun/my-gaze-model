@@ -3,6 +3,7 @@ from queue import Empty, Queue
 
 import cv2
 import numpy as np
+from pynput.mouse import Controller
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from src.inference import GazePipeline3D
@@ -250,6 +251,7 @@ class ScreenRecorder(QObject):
         self.fps = fps
         self._is_running = False
         self.video_writer = None
+        self.mouse_controller = Controller()
 
     @pyqtSlot()
     def run(self):
@@ -305,6 +307,22 @@ class ScreenRecorder(QObject):
                 # Convert to numpy array (BGR format for OpenCV)
                 frame = np.array(screenshot)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+                # Draw synthetic mouse cursor
+                try:
+                    mx, my = self.mouse_controller.position
+                    local_x = int(mx - monitor["left"])
+                    local_y = int(my - monitor["top"])
+
+                    # Only draw if inside the frame bounds
+                    if 0 <= local_x < width and 0 <= local_y < height:
+                        # Black outline (outer ring)
+                        cv2.circle(frame, (local_x, local_y), 8, (0, 0, 0), 2)
+                        # White fill (inner dot)
+                        cv2.circle(frame, (local_x, local_y), 6, (255, 255, 255), -1)
+                except Exception:
+                    # Silently ignore errors (e.g., mouse on different monitor)
+                    pass
 
                 # Write frame
                 self.video_writer.write(frame)
