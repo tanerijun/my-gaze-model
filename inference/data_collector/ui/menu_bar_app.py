@@ -4,7 +4,7 @@ Menu Bar Application for Gaze Data Collection
 Provides a menu bar interface that controls the data collection workflow
 """
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
@@ -38,6 +38,45 @@ class MenuBarApp(QObject):
         self.controller.state_changed.connect(self._on_state_changed)
 
         print("Menu bar app initialized.")
+
+    def _show_focused_message(
+        self, title, message, icon_type=QMessageBox.Icon.Information
+    ):
+        """Show a message box with forced focus and always-on-top behavior."""
+        msg = QMessageBox()
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setIcon(icon_type)
+        msg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        msg.activateWindow()
+        msg.raise_()
+        msg.exec()
+
+    def _show_focused_question(self, title, message, buttons):
+        """Show a question dialog with forced focus and always-on-top behavior."""
+        msg = QMessageBox()
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setIcon(QMessageBox.Icon.Question)
+        msg.setStandardButtons(buttons)
+        msg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        msg.activateWindow()
+        msg.raise_()
+        return msg.exec()
+
+    def _show_focused_critical(
+        self, title, message, buttons=QMessageBox.StandardButton.Ok
+    ):
+        """Show a critical error dialog with forced focus and always-on-top behavior."""
+        msg = QMessageBox()
+        msg.setWindowTitle(title)
+        msg.setText(message)
+        msg.setIcon(QMessageBox.Icon.Critical)
+        msg.setStandardButtons(buttons)
+        msg.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint)
+        msg.activateWindow()
+        msg.raise_()
+        return msg.exec()
 
     def _setup_menu_bar(self):
         """Setup the menu bar icon and menu."""
@@ -103,8 +142,7 @@ class MenuBarApp(QObject):
         print(f"Participant: {self.controller.participant_name}")
 
         # Show info message
-        QMessageBox.information(
-            None,
+        self._show_focused_message(
             "Starting Session",
             "System benchmark will start now.\nThis may take a few moments.",
         )
@@ -126,8 +164,7 @@ class MenuBarApp(QObject):
             self.start_action.triggered.connect(self._on_start_calibration)
             self.stop_action.setVisible(False)
 
-            QMessageBox.information(
-                None,
+            self._show_focused_message(
                 "Benchmark Complete",
                 "System benchmark completed successfully!\n\nClick 'Start Calibration' from the menu to continue.",
             )
@@ -145,16 +182,14 @@ class MenuBarApp(QObject):
             self.collection_elapsed = 0
             self.collection_timer.start(1000)
 
-            QMessageBox.information(
-                None,
+            self._show_focused_message(
                 "Collection Started",
                 "Calibration completed!\n\nData collection is now active.\n每 20 秒會出現兩點，和上個步驟一樣點擊藍點。\n\nClick 'Stop Collection' from the menu when done.",
             )
 
     def _on_start_calibration(self):
         """Handle start calibration request."""
-        QMessageBox.information(
-            None,
+        self._show_focused_message(
             "Starting Calibration",
             "Calibration will now begin.\n\n- 頭部保持不動.\n- 注視好藍點後再點擊（別眨眼）\n- 休息（可以眨眼）\n- 按「空白鍵」繼續",
         )
@@ -174,8 +209,7 @@ class MenuBarApp(QObject):
         self.start_action.triggered.connect(self._on_export_requested)
         self.stop_action.setVisible(False)
 
-        QMessageBox.information(
-            None,
+        self._show_focused_message(
             "Collection Complete",
             f"Data collection stopped.\n\nTotal time: {minutes}m {seconds}s\n\nNext step: Click 'Export Data' from the menu to upload your data and complete the experiment.",
         )
@@ -197,7 +231,7 @@ class MenuBarApp(QObject):
         zip_path = self.controller.data_manager.export_session_as_zip()
 
         if not zip_path or not zip_path.exists():
-            QMessageBox.critical(None, "Error", "Failed to create ZIP file.")
+            self._show_focused_critical("Error", "Failed to create ZIP file.")
             return
 
         # Get R2 credentials from environment
@@ -205,8 +239,7 @@ class MenuBarApp(QObject):
         secret_key = os.getenv("R2_SECRET_ACCESS_KEY")
 
         if not access_key or not secret_key:
-            QMessageBox.critical(
-                None,
+            self._show_focused_critical(
                 "Upload Error",
                 "R2 credentials not found.\n\n"
                 "Please set R2_ACCESS_KEY_ID and R2_SECRET_ACCESS_KEY environment variables.",
@@ -218,8 +251,6 @@ class MenuBarApp(QObject):
 
     def _attempt_upload(self, zip_path, access_key, secret_key, retry_count=0):
         """Attempt to upload with error handling and retry capability."""
-        from PyQt6.QtCore import Qt
-
         from data_collector.utils.r2_uploader import R2UploadManager
 
         try:
@@ -232,8 +263,7 @@ class MenuBarApp(QObject):
 
             # Authenticate
             if not uploader.authenticate():
-                reply = QMessageBox.critical(
-                    None,
+                reply = self._show_focused_critical(
                     "Upload Error",
                     "Failed to authenticate with R2.\n\n"
                     "Please check your credentials and bucket configuration.\n\n"
@@ -257,8 +287,13 @@ class MenuBarApp(QObject):
             )
             progress.setWindowTitle("Uploading to R2")
             progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+            progress.setWindowFlags(
+                Qt.WindowType.Dialog | Qt.WindowType.WindowStaysOnTopHint
+            )
             progress.setMinimumDuration(0)
             progress.setValue(0)
+            progress.activateWindow()
+            progress.raise_()
             progress.show()
 
             # Track if upload was cancelled
@@ -302,8 +337,7 @@ class MenuBarApp(QObject):
                 self.start_action.disconnect()
                 self.start_action.triggered.connect(self._on_start_session)
 
-                QMessageBox.information(
-                    None,
+                self._show_focused_message(
                     "Experiment Complete",
                     f"Data uploaded successfully!\n\n"
                     f"File: {zip_path.name}\n"
@@ -316,8 +350,7 @@ class MenuBarApp(QObject):
                     progress.close()
                     return
                 progress.close()
-                reply = QMessageBox.critical(
-                    None,
+                reply = self._show_focused_critical(
                     "Upload Error",
                     f"Upload failed:\n{error_message}\n\nWould you like to retry?",
                     QMessageBox.StandardButton.Retry
@@ -336,8 +369,7 @@ class MenuBarApp(QObject):
             self._upload_worker.start()
 
         except Exception as e:
-            reply = QMessageBox.critical(
-                None,
+            reply = self._show_focused_critical(
                 "Upload Error",
                 f"Failed to initialize upload:\n{str(e)}\n\nWould you like to retry?",
                 QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
@@ -347,8 +379,7 @@ class MenuBarApp(QObject):
 
     def _on_restart(self):
         """Handle restart request."""
-        reply = QMessageBox.question(
-            None,
+        reply = self._show_focused_question(
             "Restart",
             "Are you sure you want to restart?\n\nThis will reset the current session.",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -371,8 +402,7 @@ class MenuBarApp(QObject):
 
     def _on_help(self):
         """Show help dialog."""
-        QMessageBox.information(
-            None,
+        self._show_focused_message(
             "Help",
             "Gaze Data Collection Tool\n\n"
             "How to use:\n"
@@ -397,8 +427,7 @@ class MenuBarApp(QObject):
 
     def _on_quit(self):
         """Quit the application."""
-        reply = QMessageBox.question(
-            None,
+        reply = self._show_focused_question(
             "Quit",
             "Are you sure you want to quit?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
