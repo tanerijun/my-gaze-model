@@ -1,6 +1,12 @@
+import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # PyInstaller bundle
+    PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", "."))
+else:
+    # Normal development
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 ICON_PATH = PROJECT_ROOT / "data_collector" / "ui" / "assets" / "icon.png"
 

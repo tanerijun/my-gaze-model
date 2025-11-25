@@ -422,7 +422,11 @@ class MenuBarApp(QObject):
             "4. 資料收集將自動開始\n"
             "5. 完成後點 「Stop collection」\n"
             "6. 將資料上傳到伺服器\n\n"
-            "在收集期間，每 20 秒出現一次藍點，出現時注視著藍點並點擊。\n",
+            "在收集期間，每 20 秒出現一次藍點，出現時注視著藍點並點擊。\n"
+            "---\n\n"
+            "FAQ:"
+            "Q: Application freeze/crash/hang!"
+            "A: This usually happens when granting new permission access. Just RESTART the app!",
         )
 
     def _on_quit(self):

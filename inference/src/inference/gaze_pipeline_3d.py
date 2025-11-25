@@ -1,5 +1,7 @@
 import math
 import os
+import sys
+from pathlib import Path
 
 import cv2
 import mediapipe as mp
@@ -120,7 +122,12 @@ class GazePipeline3D:
 
     def _setup_face_detector(self):
         """Initialize MediaPipe face detector."""
-        model_path = os.path.join("mediapipe_models", "blaze_face_short_range.tflite")
+        if getattr(sys, "frozen", False):
+            base_path = Path(getattr(sys, "_MEIPASS", "."))
+        else:
+            base_path = Path(__file__).resolve().parent.parent.parent
+
+        model_path = base_path / "mediapipe_models" / "blaze_face_short_range.tflite"
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -138,7 +145,12 @@ class GazePipeline3D:
 
     def _setup_face_landmarker(self):
         """Initialize MediaPipe FaceLandmarker."""
-        model_path = os.path.join("mediapipe_models", "face_landmarker.task")
+        if getattr(sys, "frozen", False):
+            base_path = Path(getattr(sys, "_MEIPASS", "."))
+        else:
+            base_path = Path(__file__).resolve().parent.parent.parent
+
+        model_path = base_path / "mediapipe_models" / "face_landmarker.task"
 
         if not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -225,7 +237,8 @@ class GazePipeline3D:
 
             origin_features = {}
             if (
-                self.enable_landmarker_features and landmarker_result
+                self.enable_landmarker_features
+                and landmarker_result
                 and landmarker_result.face_landmarks
                 and landmarker_result.facial_transformation_matrixes
             ):

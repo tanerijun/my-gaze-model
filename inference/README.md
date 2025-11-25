@@ -241,3 +241,8 @@ while True:
     results = pipeline(frame)
     # Process results...
 ```
+
+## Building Data Collector
+
+1. Activate venv
+2. Run `pyinstaller pyinstaller.spec`

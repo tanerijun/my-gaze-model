@@ -1,16 +1,28 @@
-import os
 import sys
+from pathlib import Path
 
 from dotenv import load_dotenv
 
 # This ensures that the 'inference' module can be found by Python
-# when running this script from the project root directory.
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+if getattr(sys, "frozen", False):
+    # Running as PyInstaller bundle
+    base_path = Path(getattr(sys, "_MEIPASS", "."))
+else:
+    # Running as script
+    base_path = Path(__file__).parent.parent
+
+sys.path.insert(0, str(base_path))
 
 from data_collector.app import GazeDataCollectionApp
 
 # Load environment variables from .env file
-load_dotenv()
+env_file = base_path / ".env"
+if env_file.exists():
+    load_dotenv(dotenv_path=env_file)
+    print(f"Loaded .env from {env_file}")
+else:
+    print(f"Warning: .env not found at {env_file}. Using environment variables.")
+    load_dotenv()  # Fall back to current directory
 
 if __name__ == "__main__":
     app_instance = GazeDataCollectionApp()
