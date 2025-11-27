@@ -88,6 +88,11 @@ class CalibrationOverlay(QWidget):
         self.pulsate_timer.timeout.connect(self._update_pulsate)
         self.pulsate_timer.setInterval(16)  # ~60fps
 
+        # Timer to aggressively keep window on top
+        self.keep_on_top_timer = QTimer()
+        self.keep_on_top_timer.timeout.connect(self._ensure_on_top)
+        self.keep_on_top_timer.setInterval(1000)  # Check every 1 second
+
         print("CalibrationOverlay initialized.")
 
     def set_calibration_point(self, x: int, y: int):
@@ -104,6 +109,7 @@ class CalibrationOverlay(QWidget):
         self.click_accepted = False  # Reset click flag for new point
         self.pulsate_phase = 0.0
         self.pulsate_timer.stop()  # Don't start pulsating yet, wait for click
+        self.keep_on_top_timer.start()
         self.update()
 
     def clear_calibration_point(self):
@@ -111,7 +117,13 @@ class CalibrationOverlay(QWidget):
         self.calibration_point = None
         self.show_click_feedback = False
         self.pulsate_timer.stop()  # Stop pulsating
+        self.keep_on_top_timer.stop()
         self.update()
+
+    def _ensure_on_top(self):
+        """Aggressively bring window to front."""
+        self.raise_()
+        self.activateWindow()
 
     def _update_pulsate(self):
         """Update pulsation animation phase."""
@@ -312,6 +324,7 @@ class CalibrationOverlay(QWidget):
             if distance <= 40:
                 # Mark that we've accepted a click for this point
                 self.click_accepted = True
+                self.keep_on_top_timer.stop()
 
                 # Start pulsating animation for the 500ms wait period
                 self.pulsate_phase = 0.0
