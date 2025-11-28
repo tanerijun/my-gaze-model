@@ -1,20 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import sys
 
 block_cipher = None
 
 # Aggressively exclude to speed up startup
-import sys
 sys.modules['matplotlib'] = None
 sys.modules['mpl_toolkits'] = None
 
+# Get the absolute path to the project root (where this spec file is)
+project_root = os.path.abspath(os.getcwd())
+
 a = Analysis(
-    ['data_collector/main.py'],
-    pathex=['/Users/tanerijun/projects/master-research/my-gaze-model/inference'],
+    [os.path.join('data_collector', 'main.py')],
+    pathex=[project_root],
     binaries=[],
     datas=[
         ('weights', 'weights'),
         ('mediapipe_models', 'mediapipe_models'),
-        ('data_collector/ui/assets', 'data_collector/ui/assets'),
+        (os.path.join('data_collector', 'ui', 'assets'), os.path.join('data_collector', 'ui', 'assets')),
         ('.env', '.')
     ],
     hiddenimports=[
