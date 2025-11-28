@@ -177,6 +177,7 @@ class StorageWorker(QObject):
     """Pulls frames from a queue and writes them to a video file."""
 
     recording_finished = pyqtSignal(str)
+    recording_started = pyqtSignal()
     storage_error = pyqtSignal(str)
 
     def __init__(self, video_queue: Queue):
@@ -207,6 +208,7 @@ class StorageWorker(QObject):
             return
 
         print(f"Storage worker started recording to: {self.output_path}")
+        self.recording_started.emit()
 
         self._is_running = True
         while self._is_running or not self.video_queue.empty():

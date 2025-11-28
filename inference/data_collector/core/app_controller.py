@@ -150,6 +150,7 @@ class AppController(QObject):
         self.storage_worker = StorageWorker(self.video_queue)
         self.storage_worker.moveToThread(self.storage_thread)
         self.start_recording_signal.connect(self.storage_worker.setup_and_run)
+        self.storage_worker.recording_started.connect(self.on_recording_started)
 
         # --- Setup Screen Recorder & Thread ---
         self.screen_thread = QThread()
@@ -252,10 +253,11 @@ class AppController(QObject):
         self.calibration_grid = self._generate_calibration_grid()
         self.calibration_current_index = 0
         self._calibration_started = False
+        self._recording_started = False
         self._waiting_for_space = False  # Flag to require Space before next point
 
         # Track video start time for timestamp calculations
-        self.video_start_time = datetime.datetime.now()
+        self.video_start_time = None
 
         # Enable video recording
         self.camera_worker.set_video_recording(True)
@@ -406,8 +408,16 @@ class AppController(QObject):
 
     # --- Data Collection Slots ---
 
+    @pyqtSlot()
+    def on_recording_started(self):
+        print("Video recording started - enabling calibration")
+        self._recording_started = True
+
     @pyqtSlot(int, int)
     def on_camera_ready_for_recording(self, width: int, height: int):
+        # Track video start time for timestamp calculations
+        self.video_start_time = datetime.datetime.now()
+
         # Use the session_id from data_manager to ensure consistency
         session_id = self.data_manager.session_id
         video_filename = f"session_{session_id}.mp4"
@@ -450,6 +460,8 @@ class AppController(QObject):
         if self.state == AppState.CALIBRATING:
             # Show the next calibration point if we haven't started yet
             if not self._calibration_started:
+                if not self._recording_started:
+                    return
                 self._calibration_started = True
                 self._show_next_calibration_point()
         elif self.state == AppState.COLLECTING:
@@ -495,9 +507,11 @@ class AppController(QObject):
         gaze_result_serializable = _filter_gaze_result(gaze_result)
 
         # Calculate video timestamp (time since video started)
-        video_timestamp = (
-            datetime.datetime.now() - self.video_start_time
-        ).total_seconds()
+        video_timestamp = 0.0
+        if self.video_start_time:
+            video_timestamp = (
+                datetime.datetime.now() - self.video_start_time
+            ).total_seconds()
 
         # Record the collected point for local tracking
         self.calibration_points_collected.append(
@@ -731,9 +745,11 @@ class AppController(QObject):
         gaze_result_serializable = _filter_gaze_result(gaze_result)
 
         # Calculate video timestamp
-        video_timestamp = (
-            datetime.datetime.now() - self.video_start_time
-        ).total_seconds()
+        video_timestamp = 0.0
+        if self.video_start_time:
+            video_timestamp = (
+                datetime.datetime.now() - self.video_start_time
+            ).total_seconds()
 
         # Save to data manager
         self.data_manager.add_explicit_click(
@@ -805,9 +821,11 @@ class AppController(QObject):
         gaze_result_serializable = _filter_gaze_result(gaze_result)
 
         # Calculate video timestamp
-        video_timestamp = (
-            datetime.datetime.now() - self.video_start_time
-        ).total_seconds()
+        video_timestamp = 0.0
+        if self.video_start_time:
+            video_timestamp = (
+                datetime.datetime.now() - self.video_start_time
+            ).total_seconds()
 
         # Save to data manager
         self.data_manager.add_implicit_click(
