@@ -184,7 +184,7 @@ class MenuBarApp(QObject):
 
             self._show_focused_message(
                 "Collection Started",
-                "Calibration completed!\n\nData collection is now active.\n每 20 秒會出現兩點，和上個步驟一樣點擊藍點。\n\nClick 'Stop Collection' from the menu when done.",
+                "Calibration completed!\n\nData collection is now active.\n每 20 秒會出現藍點，和上個步驟一樣注視並點擊藍點。\n\nClick 'Stop Collection' from the menu when done.",
             )
 
     def _on_start_calibration(self):
