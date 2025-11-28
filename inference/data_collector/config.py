@@ -41,5 +41,5 @@ DRIFT_THRESHOLDS = {
 }
 
 # Continuous Collection Settings
-EXPLICIT_POINT_INTERVAL_SECONDS = 20  # Time between random explicit points
+EXPLICIT_POINT_INTERVAL_SECONDS = 15  # Time between random explicit points
 ENABLE_IMPLICIT_CLICKS = True  # Enable tracking of natural mouse clicks
