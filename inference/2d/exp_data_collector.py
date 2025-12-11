@@ -7,8 +7,9 @@ import json
 import os
 import sys
 import warnings
+from collections import deque
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import cv2
 import numpy as np
@@ -494,8 +495,14 @@ def evaluate_gaze_model_static(
                     raise AssertionError(f"Unexpected pipeline_2d output: {results_2d}")
 
                 pog = results_2d[0]["pog"]
+
+                screen_width = metadata["screenResolution"]["width"]
+                screen_height = metadata["screenResolution"]["height"]
+                pog_x = max(0, min(screen_width - 1, pog["x"]))
+                pog_y = max(0, min(screen_height - 1, pog["y"]))
+
                 click_data["predictions"].append(
-                    {"frame_idx": frame_idx, "x": pog["x"], "y": pog["y"]}
+                    {"frame_idx": frame_idx, "x": pog_x, "y": pog_y}
                 )
 
     cap.release()
@@ -702,8 +709,14 @@ def evaluate_gaze_model_dynamic(
                     raise AssertionError(f"Unexpected pipeline_2d output: {results_2d}")
 
                 pog = results_2d[0]["pog"]
+
+                screen_width = metadata["screenResolution"]["width"]
+                screen_height = metadata["screenResolution"]["height"]
+                pog_x = max(0, min(screen_width - 1, pog["x"]))
+                pog_y = max(0, min(screen_height - 1, pog["y"]))
+
                 click_data["predictions"].append(
-                    {"frame_idx": frame_idx, "x": pog["x"], "y": pog["y"]}
+                    {"frame_idx": frame_idx, "x": pog_x, "y": pog_y}
                 )
 
     cap.release()
@@ -809,6 +822,315 @@ def save_evaluation_summary(
         print(f"Evaluation summary saved to: {output_path}")
 
 
+def generate_gaze_demo(
+    webcam_path: Path,
+    screen_path: Path,
+    output_path: Path,
+    metadata: dict,
+    gaze_pipeline_3d: GazePipeline3D,
+    context_frames: int = 0,
+    buffer_size: int | None = None,
+    feature_keys: list[str] = ["pitch", "yaw"],
+    webcam_video_offset_ms: float = 0,
+    visualization_mode: Literal["point", "heatmap", "scanpath"] = "point",
+    webcam_scale: float = 0.25,  # scale factor for webcam overlay
+    point_radius: int = 15,
+    point_color: tuple = (0, 255, 0),  # BGR
+    point_thickness: int = -1,  # -1 for filled circle
+    heatmap_radius: int = 80,
+    heatmap_decay: float = 0.95,
+    scanpath_length: int = 30,
+    scanpath_thickness: int = 3,
+):
+    """
+    Generate a demo video with gaze visualization overlaid on screen recording,
+    with webcam feed in the bottom-right corner.
+    """
+    print(f"\n{'=' * 60}")
+    print("GENERATING GAZE DEMO VIDEO")
+    print(f"{'=' * 60}")
+    print(f"Visualization mode: {visualization_mode}")
+    print(f"Webcam offset: {webcam_video_offset_ms}ms")
+
+    # Initial captures for info
+    webcam_cap = cv2.VideoCapture(str(webcam_path))
+    screen_cap = cv2.VideoCapture(str(screen_path))
+
+    if not webcam_cap.isOpened():
+        raise IOError(f"Cannot open webcam video: {webcam_path}")
+    if not screen_cap.isOpened():
+        raise IOError(f"Cannot open screen video: {screen_path}")
+
+    screen_fps = screen_cap.get(cv2.CAP_PROP_FPS)
+    webcam_fps = webcam_cap.get(cv2.CAP_PROP_FPS)
+
+    screen_width = int(screen_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    screen_height = int(screen_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    webcam_width = int(webcam_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    webcam_height = int(webcam_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    total_screen_frames = int(screen_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    total_webcam_frames = int(webcam_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    print(
+        f"\nScreen: {screen_width}x{screen_height} @ {screen_fps:.2f} FPS, {total_screen_frames} frames"
+    )
+    print(
+        f"Webcam: {webcam_width}x{webcam_height} @ {webcam_fps:.2f} FPS, {total_webcam_frames} frames"
+    )
+
+    # Calculate webcam overlay dimensions
+    overlay_height = int(screen_height * webcam_scale)
+    overlay_width = int(webcam_width * overlay_height / webcam_height)
+
+    # Calculate webcam offset in frames
+    webcam_offset_frames = int((webcam_video_offset_ms / 1000.0) * webcam_fps)
+
+    # Close initial captures
+    webcam_cap.release()
+    screen_cap.release()
+
+    # == Compute Gaze Predictions ==
+    print("\n" + "=" * 60)
+    print("Computing gaze predictions from webcam feed")
+    print("=" * 60)
+
+    print("\nTraining initial mapper...")
+    mapper = train_and_get_initial_mapper(
+        webcam_path, metadata, gaze_pipeline_3d, context_frames=context_frames
+    )
+    mapper.enable_dynamic_calibration = True
+    mapper.buffer_size = buffer_size
+    print("Dynamic mapper enabled.")
+
+    initial_stats = mapper.get_training_stats()
+    print(f"Initial calibration: {initial_stats['initial_samples']} samples")
+
+    gaze_pipeline_2d = GazePipeline2D(
+        gaze_pipeline_3d,
+        mapper,
+        feature_keys,
+    )
+
+    # Process webcam frames sequentially
+    webcam_cap_phase1 = cv2.VideoCapture(str(webcam_path))
+    gaze_predictions = {}  # webcam_frame_idx -> (gaze_x, gaze_y)
+
+    # Build calibration click map if using dynamic calibration
+    calibration_click_map = {}
+    calibration_clicks = metadata["clicks"]
+    for click in calibration_clicks:
+        frame_idx = int(click["videoTimestamp"] * webcam_fps / 1000)
+        calibration_click_map[frame_idx] = click
+
+    print(f"Processing {total_webcam_frames} webcam frames...")
+
+    for webcam_frame_idx in tqdm(
+        range(total_webcam_frames), desc="Computing gaze", unit="frame"
+    ):
+        ret, webcam_frame = webcam_cap_phase1.read()
+        if not ret:
+            break
+
+        # Check for dynamic calibration update
+        if webcam_frame_idx in calibration_click_map:
+            calib_click = calibration_click_map[webcam_frame_idx]
+            try:
+                results_3d = gaze_pipeline_3d(webcam_frame)
+                if results_3d and len(results_3d) > 0:
+                    feature_vector = gaze_pipeline_2d.extract_feature_vector(
+                        results_3d[0]
+                    )
+                    target_point = (calib_click["screenX"], calib_click["screenY"])
+                    mapper.add_dynamic_calibration_point(feature_vector, target_point)
+                    mapper.train()
+            except Exception:
+                pass  # Skip if calibration update fails
+
+        # Compute gaze prediction
+        try:
+            results_2d = gaze_pipeline_2d.predict(webcam_frame)
+            if results_2d and len(results_2d) > 0 and results_2d[0]["pog"]:
+                pog = results_2d[0]["pog"]
+
+                # Scale to screen recording resolution
+                scale_x = screen_width / metadata["screenResolution"]["width"]
+                scale_y = screen_height / metadata["screenResolution"]["height"]
+                gaze_x = int(pog["x"] * scale_x)
+                gaze_y = int(pog["y"] * scale_y)
+
+                # Clip to screen bounds
+                gaze_x = max(0, min(screen_width - 1, gaze_x))
+                gaze_y = max(0, min(screen_height - 1, gaze_y))
+
+                gaze_predictions[webcam_frame_idx] = (gaze_x, gaze_y)
+        except Exception:
+            # Skip frames where prediction fails
+            pass
+
+    webcam_cap_phase1.release()
+    print(f"\nComputed {len(gaze_predictions)} gaze predictions")
+
+    # == PHASE 2: Generate Demo Video ==
+    print("\n" + "=" * 60)
+    print("PHASE 2: Generating demo video")
+    print("=" * 60)
+
+    # Re-open captures for demo generation
+    webcam_cap = cv2.VideoCapture(str(webcam_path))
+    screen_cap = cv2.VideoCapture(str(screen_path))
+
+    # Setup video writer
+    fourcc = cv2.VideoWriter.fourcc(*"mp4v")
+    out = cv2.VideoWriter(
+        str(output_path), fourcc, screen_fps, (screen_width, screen_height)
+    )
+
+    if not out.isOpened():
+        raise RuntimeError(f"Failed to open video writer at {output_path}")
+
+    # Initialize visualization-specific data structures
+    heatmap_accumulator = np.zeros((screen_height, screen_width), dtype=np.float32)
+    gaze_history = deque(maxlen=scanpath_length)
+
+    print(f"Rendering {total_screen_frames} frames...")
+
+    for screen_frame_idx in tqdm(
+        range(total_screen_frames), desc="Rendering demo", unit="frame"
+    ):
+        ret_screen, screen_frame = screen_cap.read()
+        if not ret_screen:
+            print(f"Warning: Could not read screen frame {screen_frame_idx}")
+            break
+
+        # Calculate corresponding webcam frame (with offset)
+        time_s = screen_frame_idx / screen_fps
+        webcam_frame_idx = int(time_s * webcam_fps) + webcam_offset_frames
+        webcam_frame_idx = max(0, min(webcam_frame_idx, total_webcam_frames - 1))
+
+        # Look up pre-computed gaze prediction
+        gaze_point = gaze_predictions.get(webcam_frame_idx)
+
+        # Read webcam frame for overlay (it's ok to seek now)
+        webcam_cap.set(cv2.CAP_PROP_POS_FRAMES, webcam_frame_idx)
+        ret_webcam, webcam_frame = webcam_cap.read()
+        if not ret_webcam:
+            webcam_frame = np.zeros((overlay_height, overlay_width, 3), dtype=np.uint8)
+
+        # Create output frame
+        output_frame = screen_frame.copy()
+
+        if gaze_point:
+            gaze_x, gaze_y = gaze_point
+
+            if visualization_mode == "point":
+                # Draw simple point
+                cv2.circle(
+                    output_frame,
+                    (gaze_x, gaze_y),
+                    point_radius,
+                    point_color,
+                    point_thickness,
+                )
+                # Add outer ring for better visibility
+                cv2.circle(
+                    output_frame, (gaze_x, gaze_y), point_radius + 3, (255, 255, 255), 2
+                )
+
+            elif visualization_mode == "heatmap":
+                # Update heatmap accumulator
+                y_indices, x_indices = np.ogrid[:screen_height, :screen_width]
+                distance = np.sqrt(
+                    (x_indices - gaze_x) ** 2 + (y_indices - gaze_y) ** 2
+                )
+                gaussian = np.exp(-(distance**2) / (2 * heatmap_radius**2))
+                heatmap_accumulator += gaussian
+
+                # Apply decay to existing heatmap
+                heatmap_accumulator *= heatmap_decay
+
+                # Normalize and convert to color
+                normalized_heatmap = heatmap_accumulator / (
+                    heatmap_accumulator.max() + 1e-6
+                )
+                heatmap_colored = cv2.applyColorMap(
+                    (normalized_heatmap * 255).astype(np.uint8), cv2.COLORMAP_JET
+                )
+
+                # Blend heatmap with original frame
+                alpha = 0.3
+                output_frame = cv2.addWeighted(
+                    output_frame, 1 - alpha, heatmap_colored, alpha, 0
+                )
+
+            elif visualization_mode == "scanpath":
+                # Add current point to history
+                gaze_history.append(gaze_point)
+
+                # Draw lines connecting points
+                if len(gaze_history) > 1:
+                    points = list(gaze_history)
+                    for i in range(len(points) - 1):
+                        # Fade older points
+                        alpha = (i + 1) / len(points)
+                        color = tuple(int(c * alpha) for c in point_color)
+                        thickness = max(1, int(scanpath_thickness * alpha))
+                        cv2.line(
+                            output_frame, points[i], points[i + 1], color, thickness
+                        )
+
+                # Draw current point
+                if len(gaze_history) > 0:
+                    cv2.circle(
+                        output_frame, gaze_history[-1], point_radius, point_color, -1
+                    )
+                    cv2.circle(
+                        output_frame,
+                        gaze_history[-1],
+                        point_radius + 3,
+                        (255, 255, 255),
+                        2,
+                    )
+
+        # Resize and overlay webcam feed in bottom-right corner
+        webcam_resized = cv2.resize(webcam_frame, (overlay_width, overlay_height))
+
+        # Calculate position (bottom-right with margin)
+        margin = 10
+        y_start = screen_height - overlay_height - margin
+        x_start = screen_width - overlay_width - margin
+
+        # Add border around webcam feed
+        border_thickness = 3
+        cv2.rectangle(
+            output_frame,
+            (x_start - border_thickness, y_start - border_thickness),
+            (
+                x_start + overlay_width + border_thickness,
+                y_start + overlay_height + border_thickness,
+            ),
+            (255, 255, 255),
+            border_thickness,
+        )
+
+        # Overlay webcam feed
+        output_frame[
+            y_start : y_start + overlay_height, x_start : x_start + overlay_width
+        ] = webcam_resized
+
+        # Write frame
+        out.write(output_frame)
+
+    # Cleanup
+    webcam_cap.release()
+    screen_cap.release()
+    out.release()
+
+    print(f"\n{'=' * 60}")
+    print(f"Demo video saved to: {output_path}")
+    print(f"{'=' * 60}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Process collected experiment data for gaze estimation"
@@ -869,7 +1191,7 @@ def main():
     metadata = load_metadata(metadata_path)
     print_session_info(metadata)
 
-    webcam_video_offset_ms = (
+    webcam_video_offset_ms = (  # noqa: F841
         metadata["videoAlignment"]["alignment"]["webcamLeadsBy"]
         if metadata["videoAlignment"]["alignment"]["webcamLeadsBy"] > 0
         else metadata["videoAlignment"]["alignment"]["screenLeadsBy"]
@@ -909,9 +1231,10 @@ def main():
     # print(f"\nEvaluation results saved to: {results_file}")
     ####################
 
+    buffer_size = 110
+
     ### DYNAMIC MODE ###
     gaze_pipeline_3d.reset_tracking()  # in case it's used before
-    buffer_size = 110
     results = evaluate_gaze_model_dynamic(
         webcam_path,
         metadata,
@@ -932,6 +1255,22 @@ def main():
         json.dump(results, f, indent=2)
     print(f"\nEvaluation results saved to: {results_file}")
     ###################
+
+    ### DEMO ###
+    # gaze_pipeline_3d.reset_tracking()
+    # visualization_mode = "scanpath"
+    # generate_gaze_demo(
+    #     webcam_path,
+    #     screen_path,
+    #     output_dir / f"demo_{visualization_mode}.mp4",
+    #     metadata,
+    #     gaze_pipeline_3d,
+    #     context_frames=5,
+    #     buffer_size=buffer_size,
+    #     webcam_video_offset_ms=webcam_video_offset_ms,
+    #     visualization_mode=visualization_mode,
+    # )
+    ############
 
 
 if __name__ == "__main__":

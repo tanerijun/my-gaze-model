@@ -71,19 +71,8 @@ class GazePipeline2D:
                 print(f"Warning: Could not predict for a face. Error: {e}")
                 continue
 
-            pog_x = max(0, min(w - 1, pog_coords[0]))
-            pog_y = max(0, min(h - 1, pog_coords[1]))
-
-            result_2d = result.copy()
-            result_2d["pog"] = {"x": pog_x, "y": pog_y}
-            results_2d.append(result_2d)
-
-            # Map to screen coordinates
-            pog_coords = self.mapper.predict(feature_vector)
-
-            # Clip to screen bound
-            pog_x = max(0, min(w - 1, pog_coords[0]))
-            pog_y = max(0, min(h - 1, pog_coords[1]))
+            pog_x = pog_coords[0]
+            pog_y = pog_coords[1]
 
             # Create augmented result
             result_2d = result.copy()
