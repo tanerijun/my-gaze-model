@@ -8,6 +8,7 @@ import os
 import sys
 import warnings
 from pathlib import Path
+from typing import Optional
 
 import cv2
 import numpy as np
@@ -174,7 +175,7 @@ def preview_videos_alignment(
     print(f"\nAlignment preview saved to: {output_path}")
 
 
-def train_and_get_mapper(
+def train_and_get_initial_mapper(
     webcam_path: Path,
     metadata: dict,
     gaze_pipeline_3d: GazePipeline3D,
@@ -264,30 +265,33 @@ def train_and_get_mapper(
     return mapper
 
 
-def evaluate_gaze_model(
+# INFO: this perform worse than seeking
+def train_and_get_initial_mapper_sequential(
     webcam_path: Path,
     metadata: dict,
-    gaze_pipeline_2d: GazePipeline2D,
-    context_frames: int = 5,
+    gaze_pipeline_3d: GazePipeline3D,
+    context_frames: int = 0,
+    timing_window_ms: float = 0,
 ):
     """
-    Evaluate the 2D gaze pipeline on explicit clicks. (with seek, no implicit calibration)
+    Train initial mapper using calibration points
 
     Args:
         webcam_path: Path to webcam video
-        metadata: Metadata dictionary
-        gaze_pipeline_2d: Trained 2D gaze pipeline
-        context_frames: Number of frames before and after to evaluate
+        metadata: Metadata dictionary containing calibration points
+        gaze_pipeline_3d: 3D gaze pipeline for feature extraction
+        context_frames: Number of frames before and after the calibration frame
+                       (mutually exclusive with timing_window_ms)
+        timing_window_ms: Time window in milliseconds before and after the click timestamp
+                         (mutually exclusive with context_frames)
 
     Returns:
-        List of evaluation results with errors in pixels
+        Trained Mapper instance
     """
-    explicit_clicks = [
-        click for click in metadata["clicks"] if click["type"] == "explicit"
-    ]
+    if context_frames > 0 and timing_window_ms > 0:
+        raise ValueError("Cannot specify both context_frames and timing_window_ms")
 
-    if not explicit_clicks:
-        raise AssertionError("No explicit clicks found for evaluation")
+    calibration_points = metadata["initialCalibration"]["points"]
 
     cap = cv2.VideoCapture(str(webcam_path))
     if not cap.isOpened():
@@ -296,91 +300,119 @@ def evaluate_gaze_model(
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-    evaluation_results = []
+    # Build frame-to-calibration-point mapping
+    calibration_frame_map = {}  # frame_idx -> list of point_ids
+    calibration_points_data = {}  # point_id -> point data and frame indices
+    max_frame_needed = 0  # Track the last frame needed
 
-    for click in explicit_clicks:
-        click_id = click["id"]
-        video_timestamp_ms = click["videoTimestamp"]
-        center_frame_idx = int(video_timestamp_ms * fps / 1000)
+    for point in calibration_points:
+        point_id = point["pointId"]
+        video_timestamp_ms = point["videoTimestamp"]
 
-        frame_indices = list(
-            range(
-                center_frame_idx - context_frames, center_frame_idx + context_frames + 1
+        if timing_window_ms > 0:
+            # Use timing window method
+            window_start_ms = video_timestamp_ms - timing_window_ms
+            window_end_ms = video_timestamp_ms + timing_window_ms
+            frame_start = max(0, int(window_start_ms * fps / 1000))
+            frame_end = min(total_frames - 1, int(window_end_ms * fps / 1000))
+            frame_indices = list(range(frame_start, frame_end + 1))
+        else:
+            # Use context frames method
+            frame_idx = int(video_timestamp_ms * fps / 1000)
+            frame_indices = list(
+                range(frame_idx - context_frames, frame_idx + context_frames + 1)
             )
-        )
-        frame_indices = [idx for idx in frame_indices if 0 <= idx < total_frames]
+            frame_indices = [idx for idx in frame_indices if 0 <= idx < total_frames]
 
-        target_x = click["screenX"]
-        target_y = click["screenY"]
+        if frame_indices:
+            max_frame_needed = max(max_frame_needed, max(frame_indices))
 
-        print(f"\nEvaluating click {click_id}:")
-        print(f"  Center frame: {center_frame_idx}")
-        print(f"  Ground truth: ({target_x:.1f}, {target_y:.1f})")
+        # Store calibration point data
+        calibration_points_data[point_id] = {
+            "point": point,
+            "frame_indices": frame_indices,
+            "features": [],  # will collect features during sequential processing
+        }
 
-        frame_predictions = []
+        # reverse mapping for efficient lookup
         for frame_idx in frame_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
-            ret, frame = cap.read()
+            if frame_idx not in calibration_frame_map:
+                calibration_frame_map[frame_idx] = []
+            calibration_frame_map[frame_idx].append(point_id)
 
-            if not ret:
-                raise AssertionError(f"Error reading frame {frame_idx}")
+    frames_to_process = max_frame_needed + 20  # some buffer at the end just to be safe
 
-            results_2d = gaze_pipeline_2d.predict(frame)
+    print(f"\nProcessing {total_frames} frames for initial calibration...")
+    print(f"Calibration points: {len(calibration_points)}")
 
-            if not (results_2d and len(results_2d) > 0 and results_2d[0]["pog"]):
-                raise AssertionError(f"Unexpected pipeline_2d output: {results_2d}")
+    # Process frames sequentially
+    for frame_idx in tqdm(
+        range(frames_to_process), desc="Training initial mapper", unit="frame"
+    ):
+        ret, frame = cap.read()
 
-            pog = results_2d[0]["pog"]
-            frame_predictions.append(
-                {"frame_idx": frame_idx, "x": pog["x"], "y": pog["y"]}
-            )
+        if not ret:
+            break
 
-        # Calculate errors for each prediction
-        errors = []
-        for pred in frame_predictions:
-            euclidean_distance = np.sqrt(
-                (pred["x"] - target_x) ** 2 + (pred["y"] - target_y) ** 2
-            )
-            errors.append(euclidean_distance)
+        # Always run pipeline to maintain internal state
+        pipeline_output = gaze_pipeline_3d(frame)
 
-        mean_error = np.mean(errors)
-        median_error = np.median(errors)
-        std_error = np.std(errors)
-        percentile_95_error = np.percentile(errors, 95)
+        # Check if this frame is needed for any calibration point
+        if frame_idx in calibration_frame_map:
+            if not (pipeline_output and len(pipeline_output) > 0):
+                raise AssertionError(
+                    f"Unexpected pipeline_3d output at frame {frame_idx}: {pipeline_output}"
+                )
 
-        evaluation_results.append(
-            {
-                "click_id": click_id,
-                "timestamp": click["timestamp"],
-                "videoTimestamp": video_timestamp_ms,
-                "ground_truth": {"x": target_x, "y": target_y},
-                "num_predictions": len(frame_predictions),
-                "errors_px": errors,
-                "mean_error_px": float(mean_error),
-                "median_error_px": float(median_error),
-                "std_error_px": float(std_error),
-                "predictions": frame_predictions,
-            }
-        )
+            gaze_info = pipeline_output[0]["gaze"]
+            feature = {"pitch": gaze_info["pitch"], "yaw": gaze_info["yaw"]}
 
-        print(f"  Mean error: {mean_error:.2f}px")
-        print(f"  Median error: {median_error:.2f}px")
-        print(f"  Std error: {std_error:.2f}px")
-        print(f"  95th percentile error: {percentile_95_error:.2f}px")
+            # Add this feature to all calibration points that need it
+            for point_id in calibration_frame_map[frame_idx]:
+                calibration_points_data[point_id]["features"].append(feature)
 
     cap.release()
-    return evaluation_results
+
+    # Verify we collected features for all calibration points
+    for point_id, data in calibration_points_data.items():
+        num_features = len(data["features"])
+        num_expected = len(data["frame_indices"])
+        print(f"Collected {num_features}/{num_expected} features for {point_id}")
+
+        if num_features == 0:
+            raise AssertionError(
+                f"No features collected for calibration point {point_id}. "
+                f"Expected frames: {data['frame_indices']}"
+            )
+
+    # Create and train mapper
+    mapper = Mapper()
+
+    for point_id, data in calibration_points_data.items():
+        point = data["point"]
+        feature_vectors = [[f["pitch"], f["yaw"]] for f in data["features"]]
+        target_point = (point["screenX"], point["screenY"])
+        mapper.add_calibration_point(feature_vectors, target_point)
+
+    score_x, score_y = mapper.train()
+    print("\nInitial mapper trained successfully")
+    print(f"  R² score (X): {score_x:.4f}")
+    print(f"  R² score (Y): {score_y:.4f}")
+    print(f"  Total training samples: {len(mapper.initial_feature_vectors)}")
+
+    return mapper
 
 
-def evaluate_gaze_model_1(
+def evaluate_gaze_model_static(
     webcam_path: Path,
     metadata: dict,
-    gaze_pipeline_2d: GazePipeline2D,
+    gaze_pipeline_3d: GazePipeline3D,
+    feature_keys: list[str] = ["pitch", "yaw"],
     context_frames: int = 5,
 ):
     """
     Evaluate the 2D gaze pipeline on explicit clicks by processing frames sequentially.
-    Respecting dependencies on previous frames. (can see face_bbox effect, but no still no dynamic calibration)
+    Respecting dependencies on previous frames. (can see face_bbox effect, but no dynamic calibration)
 
     Args:
         webcam_path: Path to webcam video
@@ -398,12 +430,31 @@ def evaluate_gaze_model_1(
     if not explicit_clicks:
         raise AssertionError("No explicit clicks found for evaluation")
 
+    print(f"\n{'=' * 60}")
+    print("Static Calibration mode")
+    print(f"{'=' * 60}")
+    print(f"Explicit clicks for evaluation: {len(explicit_clicks)}")
+
     cap = cv2.VideoCapture(str(webcam_path))
     if not cap.isOpened():
         raise IOError(f"Cannot open webcam video: {webcam_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    mapper = train_and_get_initial_mapper(
+        webcam_path, metadata, gaze_pipeline_3d, context_frames=context_frames
+    )
+    print("Static mapper enabled.")
+
+    initial_stats = mapper.get_training_stats()
+    print(f"Initial calibration: {initial_stats['initial_samples']} samples")
+
+    gaze_pipeline_2d = GazePipeline2D(
+        gaze_pipeline_3d,
+        mapper,
+        feature_keys,
+    )
 
     # Build a map of frame indices to evaluate for each click
     click_eval_frames = {}
@@ -499,7 +550,221 @@ def evaluate_gaze_model_1(
         print(f"  Std error: {std_error:.2f}px")
         print(f"  95th percentile error: {percentile_95_error:.2f}px")
 
-    return evaluation_results
+    return {
+        "evaluation_results": evaluation_results,
+        "mapper_stats": mapper.get_training_stats(),
+    }
+
+
+def evaluate_gaze_model_dynamic(
+    webcam_path: Path,
+    metadata: dict,
+    gaze_pipeline_3d: GazePipeline3D,
+    feature_keys: list[str] = ["pitch", "yaw"],
+    context_frames: int = 5,
+    buffer_size: Optional[int] = None,
+):
+    """
+    Evaluate the gaze model with dynamic calibration using implicit clicks.
+
+    This function processes frames sequentially and updates the mapper with implicit
+    click data as it encounters them, simulating real-time adaptive calibration.
+
+    Args:
+        webcam_path: Path to webcam video
+        metadata: Metadata dictionary
+        gaze_pipeline_3d: 3D gaze pipeline for feature extraction
+        feature_keys: List of feature keys to extract (e.g., ["pitch", "yaw"])
+        context_frames: Number of frames before and after to evaluate explicit clicks
+        buffer_size: Maximum number of implicit samples to keep.
+                    If None, accumulates all samples (infinite buffer).
+
+    Returns:
+        Dictionary containing evaluation results and calibration history
+    """
+    explicit_clicks = [
+        click for click in metadata["clicks"] if click["type"] == "explicit"
+    ]
+    implicit_clicks = [
+        click for click in metadata["clicks"] if click["type"] == "implicit"
+    ]
+    calibration_clicks = metadata["clicks"]
+
+    if not explicit_clicks:
+        raise AssertionError("No explicit clicks found for evaluation")
+    if not implicit_clicks:
+        raise AssertionError("No implicit clicks found for dynamic calibration")
+
+    mode_name = (
+        "Accumulate (Infinite Buffer)"
+        if buffer_size is None
+        else f"Fixed Buffer (size={buffer_size})"
+    )
+    print(f"\n{'=' * 60}")
+    print(f"Dynamic Calibration Mode: {mode_name}")
+    print(f"{'=' * 60}")
+    print(f"Explicit clicks for evaluation: {len(explicit_clicks)}")
+    print(f"Implicit clicks for calibration: {len(implicit_clicks)}")
+
+    cap = cv2.VideoCapture(str(webcam_path))
+    if not cap.isOpened():
+        raise IOError(f"Cannot open webcam video: {webcam_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    print("\nTraining initial mapper...")
+    mapper = train_and_get_initial_mapper(
+        webcam_path, metadata, gaze_pipeline_3d, context_frames=context_frames
+    )
+    mapper.enable_dynamic_calibration = True
+    mapper.buffer_size = buffer_size
+    print("Dynamic mapper enabled.")
+
+    initial_stats = mapper.get_training_stats()
+    print(f"Initial calibration: {initial_stats['initial_samples']} samples")
+
+    gaze_pipeline_2d = GazePipeline2D(
+        gaze_pipeline_3d,
+        mapper,
+        feature_keys,
+    )
+
+    # frame-to-click mapping for efficient lookup
+    calibration_click_map = {}  # frame_idx -> click data
+    explicit_click_frames = {}  # click_id -> frame data
+
+    for click in calibration_clicks:
+        frame_idx = int(click["videoTimestamp"] * fps / 1000)
+        calibration_click_map[frame_idx] = click
+
+    for click in explicit_clicks:
+        click_id = click["id"]
+        video_timestamp_ms = click["videoTimestamp"]
+        center_frame_idx = int(video_timestamp_ms * fps / 1000)
+
+        frame_indices = list(
+            range(
+                center_frame_idx - context_frames, center_frame_idx + context_frames + 1
+            )
+        )
+        frame_indices = [idx for idx in frame_indices if 0 <= idx < total_frames]
+
+        explicit_click_frames[click_id] = {
+            "center_frame_idx": center_frame_idx,
+            "frame_indices": frame_indices,
+            "click": click,
+            "predictions": [],
+        }
+
+    # Track calibration history
+    calibration_history = []
+
+    # Process frames sequentially
+    for frame_idx in tqdm(range(total_frames), desc="Processing frames", unit="frame"):
+        ret, frame = cap.read()
+
+        if not ret:
+            break
+
+        # Check if this frame has an implicit click
+        if frame_idx in calibration_click_map:
+            calib_click = calibration_click_map[frame_idx]
+            results_3d = gaze_pipeline_3d(frame)
+
+            if not (results_3d and len(results_3d) > 0):
+                raise AssertionError(f"Unexpected pipeline_3d output: {results_3d}")
+
+            feature_vector = gaze_pipeline_2d.extract_feature_vector(results_3d[0])
+            target_point = (calib_click["screenX"], calib_click["screenY"])
+
+            mapper.add_dynamic_calibration_point(feature_vector, target_point)
+            mapper.train()
+
+            stats = mapper.get_training_stats()
+            calibration_history.append(
+                {
+                    "frame_idx": frame_idx,
+                    "timestamp": calib_click["timestamp"],
+                    "click_type": calib_click["type"],
+                    "total_samples": stats["total_samples"],
+                    "dynamic_samples": stats["dynamic_samples"],
+                }
+            )
+
+        # Run pipeline on every frame (to maintain internal state)
+        results_2d = gaze_pipeline_2d.predict(frame)
+
+        # Check if this frame has an explicit click
+        for click_id, click_data in explicit_click_frames.items():
+            if frame_idx in click_data["frame_indices"]:
+                if not (results_2d and len(results_2d) > 0 and results_2d[0]["pog"]):
+                    raise AssertionError(f"Unexpected pipeline_2d output: {results_2d}")
+
+                pog = results_2d[0]["pog"]
+                click_data["predictions"].append(
+                    {"frame_idx": frame_idx, "x": pog["x"], "y": pog["y"]}
+                )
+
+    cap.release()
+
+    # Process collected predictions
+    evaluation_results = []
+
+    for click_id, click_data in explicit_click_frames.items():
+        click = click_data["click"]
+        center_frame_idx = click_data["center_frame_idx"]
+        frame_predictions = click_data["predictions"]
+
+        target_x = click["screenX"]
+        target_y = click["screenY"]
+
+        print(f"\nEvaluating click {click_id}:")
+        print(f"  Center frame: {center_frame_idx}")
+        print(f"  Ground truth: ({target_x:.1f}, {target_y:.1f})")
+
+        if not frame_predictions:
+            raise AssertionError(f"No predictions collected for click {click_id}")
+
+        # Calculate errors for each prediction
+        errors = []
+        for pred in frame_predictions:
+            euclidean_distance = np.sqrt(
+                (pred["x"] - target_x) ** 2 + (pred["y"] - target_y) ** 2
+            )
+            errors.append(euclidean_distance)
+
+        mean_error = np.mean(errors)
+        median_error = np.median(errors)
+        std_error = np.std(errors)
+        percentile_95_error = np.percentile(errors, 95)
+
+        evaluation_results.append(
+            {
+                "click_id": click_id,
+                "timestamp": click["timestamp"],
+                "videoTimestamp": click["videoTimestamp"],
+                "ground_truth": {"x": target_x, "y": target_y},
+                "num_predictions": len(frame_predictions),
+                "errors_px": errors,
+                "mean_error_px": float(mean_error),
+                "median_error_px": float(median_error),
+                "std_error_px": float(std_error),
+                "percentile_95_error_px": float(percentile_95_error),
+                "predictions": frame_predictions,
+            }
+        )
+
+        print(f"  Mean error: {mean_error:.2f}px")
+        print(f"  Median error: {median_error:.2f}px")
+        print(f"  Std error: {std_error:.2f}px")
+        print(f"  95th percentile error: {percentile_95_error:.2f}px")
+
+    return {
+        "evaluation_results": evaluation_results,
+        "calibration_history": calibration_history,
+        "mapper_stats": mapper.get_training_stats(),
+    }
 
 
 def save_evaluation_summary(
@@ -624,33 +889,49 @@ def main():
         smooth_gaze=False,
     )
 
-    mapper = train_and_get_mapper(
-        webcam_path, metadata, gaze_pipeline_3d, context_frames=5
-    )
+    ### STATIC MODE ###
+    # results = evaluate_gaze_model_static(
+    #     webcam_path,
+    #     metadata,
+    #     gaze_pipeline_3d,
+    #     context_frames=5,
+    # )
 
-    gaze_pipeline_2d = GazePipeline2D(
-        gaze_pipeline_3d,
-        mapper,
-        ["pitch", "yaw"],
-    )
+    # save_evaluation_summary(
+    #     results["evaluation_results"],
+    #     output_path=output_dir / "evaluation_summary_static.txt",
+    # )
 
-    evaluation_results = evaluate_gaze_model_1(
+    # results_file = output_dir / "evaluation_results_static.json"
+    # output_dir.mkdir(parents=True, exist_ok=True)
+    # with open(results_file, "w") as f:
+    #     json.dump(results, f, indent=2)
+    # print(f"\nEvaluation results saved to: {results_file}")
+    ####################
+
+    ### DYNAMIC MODE ###
+    gaze_pipeline_3d.reset_tracking()  # in case it's used before
+    buffer_size = 110
+    results = evaluate_gaze_model_dynamic(
         webcam_path,
         metadata,
-        gaze_pipeline_2d,
+        gaze_pipeline_3d,
         context_frames=5,
+        buffer_size=buffer_size,
     )
 
+    buffer_suffix = "accumulate" if buffer_size is None else f"buffer_{buffer_size}"
     save_evaluation_summary(
-        evaluation_results, output_path=output_dir / "evalutation_summary.txt"
+        results["evaluation_results"],
+        output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
     )
 
-    # Save evaluation result
-    results_file = output_dir / "evaluation_results.json"
+    results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
     output_dir.mkdir(parents=True, exist_ok=True)
     with open(results_file, "w") as f:
-        json.dump(evaluation_results, f, indent=2)
+        json.dump(results, f, indent=2)
     print(f"\nEvaluation results saved to: {results_file}")
+    ###################
 
 
 if __name__ == "__main__":
