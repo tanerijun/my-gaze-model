@@ -1225,6 +1225,38 @@ def main():
         choices=["cpu", "cuda"],
         help="Device to run inference on (default: cpu)",
     )
+    parser.add_argument(
+        "--tasks",
+        type=str,
+        nargs="+",
+        required=True,
+        choices=[
+            "alignment_preview",
+            "static_evaluation",
+            "dynamic_evaluation",
+            "demo_video",
+        ],
+        help="Tasks to perform. Can specify multiple tasks.",
+    )
+    parser.add_argument(
+        "--context-frames",
+        type=int,
+        default=5,
+        help="Number of context frames for calibration (default: 5)",
+    )
+    parser.add_argument(
+        "--buffer-size",
+        type=int,
+        default=110,
+        help="Buffer size for dynamic calibration. Use -1 for infinite accumulation (default: 110)",
+    )
+    parser.add_argument(
+        "--demo-visualization-mode",
+        type=str,
+        default="scanpath",
+        choices=["point", "heatmap", "scanpath"],
+        help="Visualization mode for demo video (default: point)",
+    )
 
     args = parser.parse_args()
 
@@ -1258,18 +1290,18 @@ def main():
     metadata = load_metadata(metadata_path)
     print_session_info(metadata)
 
+    dynamic_calibration_buffer_size = (
+        None if args.buffer_size == -1 else args.buffer_size
+    )
+    print(f"Dynamic calibration buffer size: {dynamic_calibration_buffer_size}")
+
+    webcam_video_offset_ms = 0  # better effect
     # webcam_video_offset_ms = (  # noqa: F841
     #     metadata["videoAlignment"]["alignment"]["webcamLeadsBy"]
     #     if metadata["videoAlignment"]["alignment"]["webcamLeadsBy"] > 0
     #     else metadata["videoAlignment"]["alignment"]["screenLeadsBy"] * -1
     # )
-
-    # Uncomment to generate a side by side preview
-    # preview_videos_alignment(
-    #     webcam_path,
-    #     screen_path,
-    #     webcam_video_offset_ms,
-    # )
+    #
 
     gaze_pipeline_3d = GazePipeline3D(
         weights_path=str(weights_path),
@@ -1278,64 +1310,87 @@ def main():
         smooth_gaze=False,
     )
 
-    ### STATIC MODE ###
-    # results = evaluate_gaze_model_static(
-    #     webcam_path,
-    #     metadata,
-    #     gaze_pipeline_3d,
-    #     context_frames=5,
-    # )
+    if "alignment_preview" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Generating alignment preview")
+        print(f"{'=' * 60}")
+        preview_videos_alignment(
+            webcam_path,
+            screen_path,
+            webcam_video_offset_ms,
+        )
 
-    # save_evaluation_summary(
-    #     results["evaluation_results"],
-    #     output_path=output_dir / "evaluation_summary_static.txt",
-    # )
+    if "static_evaluation" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Static calibration evaluation")
+        print(f"{'=' * 60}")
+        gaze_pipeline_3d.reset_tracking()
+        results = evaluate_gaze_model_static(
+            webcam_path,
+            metadata,
+            gaze_pipeline_3d,
+            context_frames=5,
+        )
 
-    # results_file = output_dir / "evaluation_results_static.json"
-    # with open(results_file, "w") as f:
-    #     json.dump(results, f, indent=2)
-    # print(f"\nEvaluation results saved to: {results_file}")
-    ####################
+        save_evaluation_summary(
+            results["evaluation_results"],
+            output_path=output_dir / "evaluation_summary_static.txt",
+        )
 
-    buffer_size = 110
+        results_file = output_dir / "evaluation_results_static.json"
+        with open(results_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nEvaluation results saved to: {results_file}")
 
-    ### DYNAMIC MODE ###
-    # gaze_pipeline_3d.reset_tracking()  # in case it's used before
-    # results = evaluate_gaze_model_dynamic(
-    #     webcam_path,
-    #     metadata,
-    #     gaze_pipeline_3d,
-    #     context_frames=5,
-    #     buffer_size=buffer_size,
-    # )
+    if "dynamic_evaluation" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Dynamic calibration evaluation")
+        print(f"{'=' * 60}")
+        gaze_pipeline_3d.reset_tracking()
+        results = evaluate_gaze_model_dynamic(
+            webcam_path,
+            metadata,
+            gaze_pipeline_3d,
+            context_frames=5,
+            buffer_size=dynamic_calibration_buffer_size,
+        )
 
-    # buffer_suffix = "accumulate" if buffer_size is None else f"buffer_{buffer_size}"
-    # save_evaluation_summary(
-    #     results["evaluation_results"],
-    #     output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
-    # )
+        buffer_suffix = (
+            "accumulate"
+            if dynamic_calibration_buffer_size is None
+            else f"buffer_{dynamic_calibration_buffer_size}"
+        )
+        save_evaluation_summary(
+            results["evaluation_results"],
+            output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
+        )
 
-    # results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
-    # with open(results_file, "w") as f:
-    #     json.dump(results, f, indent=2)
-    # print(f"\nEvaluation results saved to: {results_file}")
-    ###################
+        results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
+        with open(results_file, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nEvaluation results saved to: {results_file}")
 
-    ### DEMO ###
-    gaze_pipeline_3d.reset_tracking()
-    visualization_mode = "scanpath"
-    generate_gaze_demo(
-        webcam_path,
-        screen_path,
-        output_dir / f"demo_{visualization_mode}.mp4",
-        metadata,
-        gaze_pipeline_3d,
-        context_frames=5,
-        buffer_size=buffer_size,
-        webcam_video_offset_ms=0,  # works better with 0
-        visualization_mode=visualization_mode,
-    )
-    ############
+    if "demo_video" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Generating demo video")
+        print(f"{'=' * 60}")
+        gaze_pipeline_3d.reset_tracking()
+        visualization_mode = "scanpath"
+        generate_gaze_demo(
+            webcam_path,
+            screen_path,
+            output_dir / f"demo_{visualization_mode}.mp4",
+            metadata,
+            gaze_pipeline_3d,
+            context_frames=5,
+            buffer_size=dynamic_calibration_buffer_size,
+            webcam_video_offset_ms=0,  # works better with 0
+            visualization_mode=visualization_mode,
+        )
+
+    print(f"\n{'=' * 60}")
+    print("All tasks completed successfully!")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
