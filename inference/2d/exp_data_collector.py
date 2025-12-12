@@ -1202,13 +1202,15 @@ def main():
     if not screen_path.exists():
         raise FileNotFoundError("Expected screen.mp4 in data_dir")
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     metadata = load_metadata(metadata_path)
     print_session_info(metadata)
 
     webcam_video_offset_ms = (  # noqa: F841
         metadata["videoAlignment"]["alignment"]["webcamLeadsBy"]
         if metadata["videoAlignment"]["alignment"]["webcamLeadsBy"] > 0
-        else metadata["videoAlignment"]["alignment"]["screenLeadsBy"]
+        else metadata["videoAlignment"]["alignment"]["screenLeadsBy"] * -1
     )
 
     # Uncomment to generate a side by side preview
@@ -1239,7 +1241,6 @@ def main():
     # )
 
     # results_file = output_dir / "evaluation_results_static.json"
-    # output_dir.mkdir(parents=True, exist_ok=True)
     # with open(results_file, "w") as f:
     #     json.dump(results, f, indent=2)
     # print(f"\nEvaluation results saved to: {results_file}")
@@ -1264,7 +1265,6 @@ def main():
     # )
 
     # results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
-    # output_dir.mkdir(parents=True, exist_ok=True)
     # with open(results_file, "w") as f:
     #     json.dump(results, f, indent=2)
     # print(f"\nEvaluation results saved to: {results_file}")
@@ -1272,7 +1272,7 @@ def main():
 
     ### DEMO ###
     gaze_pipeline_3d.reset_tracking()
-    visualization_mode = "point"
+    visualization_mode = "scanpath"
     generate_gaze_demo(
         webcam_path,
         screen_path,
