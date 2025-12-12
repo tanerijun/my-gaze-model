@@ -879,6 +879,20 @@ def generate_gaze_demo(
         f"Webcam: {webcam_width}x{webcam_height} @ {webcam_fps:.2f} FPS, {total_webcam_frames} frames"
     )
 
+    game_start_timestamp = metadata.get("gameStartTimestamp")
+    recording_start_time = metadata.get("recordingStartTime")
+
+    if game_start_timestamp is None or recording_start_time is None:
+        print(
+            "Warning: gameStartTimestamp or recordingStartTime not found in metadata. Rendering predictions for all frames."
+        )
+        render_start_time_ms = 0
+    else:
+        # Relative time from video start
+        render_start_time_ms = game_start_timestamp - recording_start_time
+
+    render_start_frame = int((render_start_time_ms / 1000.0) * webcam_fps)
+
     # Calculate webcam overlay dimensions
     overlay_height = int(screen_height * webcam_scale)
     overlay_width = int(webcam_width * overlay_height / webcam_height)
@@ -1020,7 +1034,7 @@ def generate_gaze_demo(
         # Create output frame
         output_frame = screen_frame.copy()
 
-        if gaze_point:
+        if gaze_point and webcam_frame_idx >= render_start_frame:
             gaze_x, gaze_y = gaze_point
 
             if visualization_mode == "point":
@@ -1234,42 +1248,42 @@ def main():
     buffer_size = 110
 
     ### DYNAMIC MODE ###
-    gaze_pipeline_3d.reset_tracking()  # in case it's used before
-    results = evaluate_gaze_model_dynamic(
-        webcam_path,
-        metadata,
-        gaze_pipeline_3d,
-        context_frames=5,
-        buffer_size=buffer_size,
-    )
-
-    buffer_suffix = "accumulate" if buffer_size is None else f"buffer_{buffer_size}"
-    save_evaluation_summary(
-        results["evaluation_results"],
-        output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
-    )
-
-    results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with open(results_file, "w") as f:
-        json.dump(results, f, indent=2)
-    print(f"\nEvaluation results saved to: {results_file}")
-    ###################
-
-    ### DEMO ###
-    # gaze_pipeline_3d.reset_tracking()
-    # visualization_mode = "scanpath"
-    # generate_gaze_demo(
+    # gaze_pipeline_3d.reset_tracking()  # in case it's used before
+    # results = evaluate_gaze_model_dynamic(
     #     webcam_path,
-    #     screen_path,
-    #     output_dir / f"demo_{visualization_mode}.mp4",
     #     metadata,
     #     gaze_pipeline_3d,
     #     context_frames=5,
     #     buffer_size=buffer_size,
-    #     webcam_video_offset_ms=webcam_video_offset_ms,
-    #     visualization_mode=visualization_mode,
     # )
+
+    # buffer_suffix = "accumulate" if buffer_size is None else f"buffer_{buffer_size}"
+    # save_evaluation_summary(
+    #     results["evaluation_results"],
+    #     output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
+    # )
+
+    # results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
+    # output_dir.mkdir(parents=True, exist_ok=True)
+    # with open(results_file, "w") as f:
+    #     json.dump(results, f, indent=2)
+    # print(f"\nEvaluation results saved to: {results_file}")
+    ###################
+
+    ### DEMO ###
+    gaze_pipeline_3d.reset_tracking()
+    visualization_mode = "point"
+    generate_gaze_demo(
+        webcam_path,
+        screen_path,
+        output_dir / f"demo_{visualization_mode}.mp4",
+        metadata,
+        gaze_pipeline_3d,
+        context_frames=5,
+        buffer_size=buffer_size,
+        webcam_video_offset_ms=webcam_video_offset_ms,
+        visualization_mode=visualization_mode,
+    )
     ############
 
 
