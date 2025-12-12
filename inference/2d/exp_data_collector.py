@@ -833,24 +833,66 @@ def generate_gaze_demo(
     feature_keys: list[str] = ["pitch", "yaw"],
     webcam_video_offset_ms: float = 0,
     visualization_mode: Literal["point", "heatmap", "scanpath"] = "point",
-    webcam_scale: float = 0.25,  # scale factor for webcam overlay
+    webcam_scale: float = 0.25,
     point_radius: int = 15,
-    point_color: tuple = (0, 255, 0),  # BGR
-    point_thickness: int = -1,  # -1 for filled circle
+    point_color: tuple = (0, 255, 0),
+    point_thickness: int = -1,
     heatmap_radius: int = 80,
     heatmap_decay: float = 0.95,
     scanpath_length: int = 30,
     scanpath_thickness: int = 3,
 ):
     """
-    Generate a demo video with gaze visualization overlaid on screen recording,
-    with webcam feed in the bottom-right corner.
+    Generate a demo video with gaze visualization overlaid on screen recording.
+
+    NOTE:
+    Uses timestamp-based synchronization instead of FPS-based frame mapping
+    to handle variable frame rate (VFR) screen recordings better
+
+    Args:
+        webcam_path: Path to webcam video
+        screen_path: Path to screen recording video
+        output_path: Path to save the demo video
+        metadata: Session metadata containing timestamps and game info
+        gaze_pipeline_3d: 3D gaze pipeline for feature extraction
+        context_frames: Number of frames for calibration context
+        buffer_size: Dynamic calibration buffer size (None = infinite)
+        feature_keys: Features to extract for gaze prediction
+        webcam_video_offset_ms: Sync offset between videos
+        visualization_mode: "point", "heatmap", or "scanpath"
+        webcam_scale: Scale factor for webcam overlay (0-1)
+        point_radius: Radius of gaze point visualization
+        point_color: BGR color tuple for gaze point
+        point_thickness: Thickness of point (-1 for filled)
+        heatmap_radius: Radius of heatmap gaussian
+        heatmap_decay: Decay factor for heatmap accumulator
+        scanpath_length: Number of points in scanpath history
+        scanpath_thickness: Line thickness for scanpath
     """
     print(f"\n{'=' * 60}")
-    print("GENERATING GAZE DEMO VIDEO")
+    print("GENERATING GAZE DEMO VIDEO (TIMESTAMP-BASED SYNC)")
     print(f"{'=' * 60}")
     print(f"Visualization mode: {visualization_mode}")
     print(f"Webcam offset: {webcam_video_offset_ms}ms")
+
+    # Get game start timestamp to determine when to start rendering predictions
+    game_start_timestamp = metadata.get("gameStartTimestamp")
+    recording_start_time = metadata.get("recordingStartTime")
+
+    if game_start_timestamp is None or recording_start_time is None:
+        print(
+            "Warning: gameStartTimestamp or recordingStartTime not found in metadata."
+        )
+        print("Rendering predictions for all frames.")
+        render_start_time_ms = 0
+    else:
+        # Calculate relative time from video start
+        render_start_time_ms = game_start_timestamp - recording_start_time
+        print(f"Recording starts at: {recording_start_time}")
+        print(f"Game starts at: {game_start_timestamp}")
+        print(
+            f"Predictions will render after: {render_start_time_ms}ms from video start"
+        )
 
     # Initial captures for info
     webcam_cap = cv2.VideoCapture(str(webcam_path))
@@ -872,26 +914,18 @@ def generate_gaze_demo(
     total_screen_frames = int(screen_cap.get(cv2.CAP_PROP_FRAME_COUNT))
     total_webcam_frames = int(webcam_cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    screen_duration = total_screen_frames / screen_fps
+    webcam_duration = total_webcam_frames / webcam_fps
+
     print(
-        f"\nScreen: {screen_width}x{screen_height} @ {screen_fps:.2f} FPS, {total_screen_frames} frames"
+        f"\nScreen: {screen_width}x{screen_height} @ {screen_fps:.2f} FPS, "
+        f"{total_screen_frames} frames ({screen_duration:.2f}s)"
     )
     print(
-        f"Webcam: {webcam_width}x{webcam_height} @ {webcam_fps:.2f} FPS, {total_webcam_frames} frames"
+        f"Webcam: {webcam_width}x{webcam_height} @ {webcam_fps:.2f} FPS, "
+        f"{total_webcam_frames} frames ({webcam_duration:.2f}s)"
     )
-
-    game_start_timestamp = metadata.get("gameStartTimestamp")
-    recording_start_time = metadata.get("recordingStartTime")
-
-    if game_start_timestamp is None or recording_start_time is None:
-        print(
-            "Warning: gameStartTimestamp or recordingStartTime not found in metadata. Rendering predictions for all frames."
-        )
-        render_start_time_ms = 0
-    else:
-        # Relative time from video start
-        render_start_time_ms = game_start_timestamp - recording_start_time
-
-    render_start_frame = int((render_start_time_ms / 1000.0) * webcam_fps)
+    print(f"Duration difference: {abs(screen_duration - webcam_duration):.3f}s")
 
     # Calculate webcam overlay dimensions
     overlay_height = int(screen_height * webcam_scale)
@@ -900,13 +934,17 @@ def generate_gaze_demo(
     # Calculate webcam offset in frames
     webcam_offset_frames = int((webcam_video_offset_ms / 1000.0) * webcam_fps)
 
+    # Calculate the webcam frame index where rendering should start
+    render_start_frame = int((render_start_time_ms / 1000.0) * webcam_fps)
+    print(f"Predictions will render starting from webcam frame: {render_start_frame}")
+
     # Close initial captures
     webcam_cap.release()
     screen_cap.release()
 
-    # == Compute Gaze Predictions ==
+    # == PHASE 1: Compute Gaze Predictions ==
     print("\n" + "=" * 60)
-    print("Computing gaze predictions from webcam feed")
+    print("PHASE 1: Computing gaze predictions from webcam feed")
     print("=" * 60)
 
     print("\nTraining initial mapper...")
@@ -961,7 +999,7 @@ def generate_gaze_demo(
             except Exception:
                 pass  # Skip if calibration update fails
 
-        # Compute gaze prediction
+        # Compute gaze prediction for all frames
         try:
             results_2d = gaze_pipeline_2d.predict(webcam_frame)
             if results_2d and len(results_2d) > 0 and results_2d[0]["pog"]:
@@ -987,7 +1025,7 @@ def generate_gaze_demo(
 
     # == PHASE 2: Generate Demo Video ==
     print("\n" + "=" * 60)
-    print("PHASE 2: Generating demo video")
+    print("PHASE 2: Generating demo video with timestamp-based sync")
     print("=" * 60)
 
     # Re-open captures for demo generation
@@ -1009,23 +1047,28 @@ def generate_gaze_demo(
 
     print(f"Rendering {total_screen_frames} frames...")
 
-    for screen_frame_idx in tqdm(
-        range(total_screen_frames), desc="Rendering demo", unit="frame"
-    ):
+    # Use timestamp-based synchronization
+    pbar = tqdm(total=total_screen_frames, desc="Rendering demo", unit="frame")
+    screen_frame_idx = 0
+
+    while True:
         ret_screen, screen_frame = screen_cap.read()
         if not ret_screen:
-            print(f"Warning: Could not read screen frame {screen_frame_idx}")
             break
 
-        # Calculate corresponding webcam frame (with offset)
-        time_s = screen_frame_idx / screen_fps
-        webcam_frame_idx = int(time_s * webcam_fps) + webcam_offset_frames
+        # Get actual timestamp from screen video (handles VFR correctly)
+        screen_timestamp_ms = screen_cap.get(cv2.CAP_PROP_POS_MSEC)
+
+        # Convert to webcam frame index with offset
+        webcam_frame_idx = (
+            int((screen_timestamp_ms / 1000.0) * webcam_fps) + webcam_offset_frames
+        )
         webcam_frame_idx = max(0, min(webcam_frame_idx, total_webcam_frames - 1))
 
         # Look up pre-computed gaze prediction
         gaze_point = gaze_predictions.get(webcam_frame_idx)
 
-        # Read webcam frame for overlay (it's ok to seek now)
+        # Read webcam frame for overlay
         webcam_cap.set(cv2.CAP_PROP_POS_FRAMES, webcam_frame_idx)
         ret_webcam, webcam_frame = webcam_cap.read()
         if not ret_webcam:
@@ -1034,6 +1077,7 @@ def generate_gaze_demo(
         # Create output frame
         output_frame = screen_frame.copy()
 
+        # Only render gaze visualization if we have a prediction AND after game start
         if gaze_point and webcam_frame_idx >= render_start_frame:
             gaze_x, gaze_y = gaze_point
 
@@ -1135,6 +1179,12 @@ def generate_gaze_demo(
         # Write frame
         out.write(output_frame)
 
+        # Update progress
+        pbar.update(1)
+        screen_frame_idx += 1
+
+    pbar.close()
+
     # Cleanup
     webcam_cap.release()
     screen_cap.release()
@@ -1142,6 +1192,7 @@ def generate_gaze_demo(
 
     print(f"\n{'=' * 60}")
     print(f"Demo video saved to: {output_path}")
+    print(f"Total frames rendered: {screen_frame_idx}")
     print(f"{'=' * 60}")
 
 
@@ -1207,11 +1258,11 @@ def main():
     metadata = load_metadata(metadata_path)
     print_session_info(metadata)
 
-    webcam_video_offset_ms = (  # noqa: F841
-        metadata["videoAlignment"]["alignment"]["webcamLeadsBy"]
-        if metadata["videoAlignment"]["alignment"]["webcamLeadsBy"] > 0
-        else metadata["videoAlignment"]["alignment"]["screenLeadsBy"] * -1
-    )
+    # webcam_video_offset_ms = (  # noqa: F841
+    #     metadata["videoAlignment"]["alignment"]["webcamLeadsBy"]
+    #     if metadata["videoAlignment"]["alignment"]["webcamLeadsBy"] > 0
+    #     else metadata["videoAlignment"]["alignment"]["screenLeadsBy"] * -1
+    # )
 
     # Uncomment to generate a side by side preview
     # preview_videos_alignment(
@@ -1281,7 +1332,7 @@ def main():
         gaze_pipeline_3d,
         context_frames=5,
         buffer_size=buffer_size,
-        webcam_video_offset_ms=webcam_video_offset_ms,
+        webcam_video_offset_ms=0,  # works better with 0
         visualization_mode=visualization_mode,
     )
     ############
