@@ -1196,6 +1196,397 @@ def generate_gaze_demo(
     print(f"{'=' * 60}")
 
 
+def analyze_head_pose(
+    webcam_path: Path,
+    metadata: dict,
+    gaze_pipeline_3d: GazePipeline3D,
+    output_dir: Path,
+):
+    """
+    Analyze head pose stability throughout the session.
+
+    Generates:
+    - head_pose_angles.png: Raw angles with calibration reference
+    - head_pose_deviations.png: Absolute deviations over time
+    - head_pose_phase_comparison.png: Calibration vs game phase
+    - head_pose_deviation_distribution.png: Distribution and cumulative plots
+    - head_pose_stats.json: Statistical summary
+    - head_pose_data.json: Full frame-by-frame data
+    """
+    import matplotlib.pyplot as plt
+
+    def _extract_calibration_head_pose() -> dict[str, float]:
+        """Extract average head pose from calibration points."""
+        calibration_points = metadata["initialCalibration"]["points"]
+        cap = cv2.VideoCapture(str(webcam_path))
+        if not cap.isOpened():
+            raise IOError(f"Cannot open webcam video: {webcam_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        head_poses = []
+
+        print(
+            f"\nExtracting head pose from {len(calibration_points)} calibration points..."
+        )
+
+        for point in calibration_points:
+            video_timestamp_ms = point["videoTimestamp"]
+            frame_idx = int(video_timestamp_ms * fps / 1000)
+
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+
+            if ret:
+                results = gaze_pipeline_3d(frame)
+                if results and len(results) > 0:
+                    gaze_origin = results[0].get("gaze_origin_features")
+                    if gaze_origin and "head_pitch" in gaze_origin:
+                        head_poses.append(
+                            {
+                                "pitch": gaze_origin["head_pitch"],
+                                "yaw": gaze_origin["head_yaw"],
+                                "roll": gaze_origin["head_roll"],
+                            }
+                        )
+
+        cap.release()
+
+        if not head_poses:
+            raise ValueError("Could not extract head pose from calibration frames. ")
+
+        avg_pitch = np.mean([hp["pitch"] for hp in head_poses])
+        avg_yaw = np.mean([hp["yaw"] for hp in head_poses])
+        avg_roll = np.mean([hp["roll"] for hp in head_poses])
+
+        std_pitch = np.std([hp["pitch"] for hp in head_poses])
+        std_yaw = np.std([hp["yaw"] for hp in head_poses])
+        std_roll = np.std([hp["roll"] for hp in head_poses])
+
+        print(f"\nCalibration Head Pose (n={len(head_poses)} frames):")
+        print(f"  Pitch: {avg_pitch:.2f}° (±{std_pitch:.2f}°)")
+        print(f"  Yaw:   {avg_yaw:.2f}° (±{std_yaw:.2f}°)")
+        print(f"  Roll:  {avg_roll:.2f}° (±{std_roll:.2f}°)")
+
+        return {
+            "pitch": avg_pitch,
+            "yaw": avg_yaw,
+            "roll": avg_roll,
+            "pitch_std": std_pitch,
+            "yaw_std": std_yaw,
+            "roll_std": std_roll,
+            "num_frames": len(head_poses),
+        }  # type: ignore
+
+    def _analyze_session() -> list[dict]:
+        """Analyze head pose for entire session."""
+        game_start_timestamp = metadata.get("gameStartTimestamp")
+        recording_start_time = metadata.get("recordingStartTime")
+
+        if game_start_timestamp and recording_start_time:
+            game_start_time_ms = game_start_timestamp - recording_start_time
+        else:
+            game_start_time_ms = 0
+
+        cap = cv2.VideoCapture(str(webcam_path))
+        if not cap.isOpened():
+            raise IOError(f"Cannot open webcam video: {webcam_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        game_start_frame = int((game_start_time_ms / 1000.0) * fps)
+
+        print(f"\nAnalyzing head pose for {total_frames} frames...")
+        print(f"Game starts at frame {game_start_frame}")
+
+        session_data = []
+
+        for frame_idx in tqdm(
+            range(total_frames), desc="Processing frames", unit="frame"
+        ):
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            timestamp_ms = (frame_idx / fps) * 1000
+            is_game_phase = frame_idx >= game_start_frame
+
+            results = gaze_pipeline_3d(frame)
+
+            if results and len(results) > 0:
+                gaze_origin = results[0].get("gaze_origin_features")
+
+                if gaze_origin and "head_pitch" in gaze_origin:
+                    current_pitch = gaze_origin["head_pitch"]
+                    current_yaw = gaze_origin["head_yaw"]
+                    current_roll = gaze_origin["head_roll"]
+
+                    pitch_dev = current_pitch - calibration_pose["pitch"]
+                    yaw_dev = current_yaw - calibration_pose["yaw"]
+                    roll_dev = current_roll - calibration_pose["roll"]
+
+                    total_deviation = np.sqrt(pitch_dev**2 + yaw_dev**2 + roll_dev**2)
+
+                    session_data.append(
+                        {
+                            "frame_idx": frame_idx,
+                            "timestamp_ms": timestamp_ms,
+                            "is_game_phase": is_game_phase,
+                            "pitch": current_pitch,
+                            "yaw": current_yaw,
+                            "roll": current_roll,
+                            "pitch_deviation": pitch_dev,
+                            "yaw_deviation": yaw_dev,
+                            "roll_deviation": roll_dev,
+                            "total_deviation": total_deviation,
+                        }
+                    )
+                else:
+                    session_data.append(
+                        {
+                            "frame_idx": frame_idx,
+                            "timestamp_ms": timestamp_ms,
+                            "is_game_phase": is_game_phase,
+                            "pitch": None,
+                            "yaw": None,
+                            "roll": None,
+                            "pitch_deviation": None,
+                            "yaw_deviation": None,
+                            "roll_deviation": None,
+                            "total_deviation": None,
+                        }
+                    )
+
+        cap.release()
+        return session_data
+
+    def _generate_plots(session_data: list[dict]):
+        """Generate all visualization plots."""
+        valid_data = [d for d in session_data if d["total_deviation"] is not None]
+        if not valid_data:
+            print("Warning: No valid head pose data found")
+            return
+
+        timestamps = [d["timestamp_ms"] / 1000 for d in valid_data]
+        calib_data = [d for d in valid_data if not d["is_game_phase"]]
+        game_data = [d for d in valid_data if d["is_game_phase"]]
+
+        # Plot 1: Head pose angles
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(
+            timestamps,
+            [d["pitch"] for d in valid_data],
+            label="Pitch",
+            alpha=0.4,
+            linewidth=1.5,
+        )
+        ax.plot(
+            timestamps,
+            [d["yaw"] for d in valid_data],
+            label="Yaw",
+            alpha=0.4,
+            linewidth=1.5,
+        )
+        ax.plot(
+            timestamps,
+            [d["roll"] for d in valid_data],
+            label="Roll",
+            alpha=0.4,
+            linewidth=1.5,
+        )
+        ax.axhline(
+            calibration_pose["pitch"],
+            color="blue",
+            linestyle="--",
+            linewidth=2.5,
+            alpha=0.9,
+            label="Cal. Pitch",
+        )
+        ax.axhline(
+            calibration_pose["yaw"],
+            color="orange",
+            linestyle="--",
+            linewidth=2.5,
+            alpha=0.9,
+            label="Cal. Yaw",
+        )
+        ax.axhline(
+            calibration_pose["roll"],
+            color="green",
+            linestyle="--",
+            linewidth=2.5,
+            alpha=0.9,
+            label="Cal. Roll",
+        )
+        ax.set_xlabel("Time (s)", fontsize=12)
+        ax.set_ylabel("Angle (degrees)", fontsize=12)
+        ax.set_title("Head Pose Angles", fontsize=14, fontweight="bold")
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "head_pose_angles.png", dpi=150)
+        plt.close()
+        print("Saved: head_pose_angles.png")
+
+        # Plot 2: Deviations
+        fig, ax = plt.subplots(figsize=(12, 6))
+        ax.plot(
+            timestamps,
+            [abs(d["pitch_deviation"]) for d in valid_data],
+            label="Pitch Dev",
+            alpha=0.7,
+            linewidth=1.5,
+        )
+        ax.plot(
+            timestamps,
+            [abs(d["yaw_deviation"]) for d in valid_data],
+            label="Yaw Dev",
+            alpha=0.7,
+            linewidth=1.5,
+        )
+        ax.plot(
+            timestamps,
+            [abs(d["roll_deviation"]) for d in valid_data],
+            label="Roll Dev",
+            alpha=0.7,
+            linewidth=1.5,
+        )
+        ax.set_xlabel("Time (s)", fontsize=12)
+        ax.set_ylabel("Deviation (degrees)", fontsize=12)
+        ax.set_title(
+            "Absolute Deviations from Calibration", fontsize=14, fontweight="bold"
+        )
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "head_pose_deviations.png", dpi=150)
+        plt.close()
+        print("Saved: head_pose_deviations.png")
+
+        # Plot 3: Phase comparison
+        fig, ax = plt.subplots(figsize=(8, 6))
+        if calib_data and game_data:
+            calib_devs = [d["total_deviation"] for d in calib_data]
+            game_devs = [d["total_deviation"] for d in game_data]
+            ax.boxplot([calib_devs, game_devs], labels=["Calibration", "Game"])  # type: ignore
+            ax.set_ylabel("Total Deviation (degrees)", fontsize=12)
+            ax.set_title("Deviation by Phase", fontsize=14, fontweight="bold")
+            ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "head_pose_phase_comparison.png", dpi=150)
+        plt.close()
+        print("Saved: head_pose_phase_comparison.png")
+
+        # Plot 4: Distribution
+        if game_data:
+            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            fig.suptitle("Head Pose Deviation Distribution (Game Phase)", fontsize=14)
+
+            deviations = [d["total_deviation"] for d in game_data]
+
+            # Histogram
+            ax = axes[0]
+            ax.hist(deviations, bins=50, alpha=0.7, edgecolor="black")
+            ax.axvline(
+                np.mean(deviations),
+                color="red",
+                linestyle="--",
+                label=f"Mean: {np.mean(deviations):.2f}°",
+            )
+            ax.axvline(
+                np.median(deviations),
+                color="green",
+                linestyle="--",
+                label=f"Median: {np.median(deviations):.2f}°",
+            )
+            ax.set_xlabel("Total Deviation (degrees)")
+            ax.set_ylabel("Frequency")
+            ax.set_title("Distribution of Deviations")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            # Cumulative
+            ax = axes[1]
+            sorted_devs = np.sort(deviations)
+            cumulative = np.arange(1, len(sorted_devs) + 1) / len(sorted_devs) * 100
+            ax.plot(sorted_devs, cumulative)
+            ax.axhline(
+                50, color="green", linestyle="--", alpha=0.5, label="50th percentile"
+            )
+            ax.axhline(
+                95, color="red", linestyle="--", alpha=0.5, label="95th percentile"
+            )
+            ax.set_xlabel("Total Deviation (degrees)")
+            ax.set_ylabel("Cumulative Percentage")
+            ax.set_title("Cumulative Distribution")
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+
+            plt.tight_layout()
+            plt.savefig(output_dir / "head_pose_deviation_distribution.png", dpi=150)
+            plt.close()
+            print("Saved: head_pose_deviation_distribution.png")
+
+    def _save_statistics(session_data: list[dict]):
+        """Save statistics and full data."""
+        valid_data = [d for d in session_data if d["total_deviation"] is not None]
+        game_data = [d for d in valid_data if d["is_game_phase"]]
+
+        print(f"\n{'=' * 60}")
+        print("HEAD POSE ANALYSIS SUMMARY")
+        print(f"{'=' * 60}")
+        print(f"Total frames analyzed: {len(session_data)}")
+        print(
+            f"Valid detections: {len(valid_data)} ({len(valid_data) / len(session_data) * 100:.1f}%)"
+        )
+
+        stats = {
+            "calibration_pose": calibration_pose,
+            "total_frames": len(session_data),
+            "valid_detections": len(valid_data),
+            "detection_rate": len(valid_data) / len(session_data),
+        }
+
+        if game_data:
+            game_deviations = [d["total_deviation"] for d in game_data]
+            print("\nGame Phase Head Movement:")
+            print(f"  Mean deviation: {np.mean(game_deviations):.2f}°")
+            print(f"  Median deviation: {np.median(game_deviations):.2f}°")
+            print(f"  Std deviation: {np.std(game_deviations):.2f}°")
+            print(f"  Max deviation: {np.max(game_deviations):.2f}°")
+            print(f"  95th percentile: {np.percentile(game_deviations, 95):.2f}°")
+
+            stats["game_phase"] = {
+                "num_frames": len(game_data),
+                "mean_deviation": float(np.mean(game_deviations)),
+                "median_deviation": float(np.median(game_deviations)),
+                "std_deviation": float(np.std(game_deviations)),
+                "max_deviation": float(np.max(game_deviations)),
+                "p95_deviation": float(np.percentile(game_deviations, 95)),
+            }
+
+        # Save stats
+        stats_file = output_dir / "head_pose_stats.json"
+        with open(stats_file, "w") as f:
+            json.dump(stats, f, indent=2)
+        print(f"\nStatistics saved to: {stats_file}")
+
+        # Save full data
+        data_file = output_dir / "head_pose_data.json"
+        with open(data_file, "w") as f:
+            json.dump(session_data, f, indent=2)
+        print(f"Full data saved to: {data_file}")
+
+    # Main execution
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    calibration_pose = _extract_calibration_head_pose()
+    gaze_pipeline_3d.reset_tracking()
+
+    session_data = _analyze_session()
+    _generate_plots(session_data)
+    _save_statistics(session_data)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Process collected experiment data for gaze estimation"
@@ -1235,6 +1626,7 @@ def main():
             "static_evaluation",
             "dynamic_evaluation",
             "demo_video",
+            "head_pose_analysis",
         ],
         help="Tasks to perform. Can specify multiple tasks.",
     )
@@ -1387,6 +1779,27 @@ def main():
             buffer_size=dynamic_calibration_buffer_size,
             webcam_video_offset_ms=0,  # works better with 0
             visualization_mode=visualization_mode,
+        )
+
+    if "head_pose_analysis" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Head pose analysis")
+        print(f"{'=' * 60}")
+
+        # Need to reinitialize with landmarker features enabled
+        gaze_pipeline_3d_with_landmarker = GazePipeline3D(
+            weights_path=str(weights_path),
+            device=args.device,
+            enable_landmarker_features=True,  # required for head pose
+            smooth_facebbox=False,
+            smooth_gaze=False,
+        )
+
+        analyze_head_pose(
+            webcam_path,
+            metadata,
+            gaze_pipeline_3d_with_landmarker,
+            output_dir,
         )
 
     print(f"\n{'=' * 60}")
