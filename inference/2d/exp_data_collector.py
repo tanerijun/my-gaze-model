@@ -52,7 +52,7 @@ def print_session_info(metadata: dict):
 
 
 def preview_videos_alignment(
-    webcam_path: Path, screen_path: Path, webcam_offset_ms: float = 0
+    webcam_path: Path, screen_path: Path, output_path: Path, webcam_offset_ms: float = 0
 ):
     """
     A helper method that output videos put side by side to visually inspect if they align perfectly
@@ -60,6 +60,7 @@ def preview_videos_alignment(
     Args:
         webcam_path: Path to webcam video
         screen_path: Path to screen video
+        output_path: Path to output video
         sync_offset_ms: Offset in milliseconds to shift webcam relative to screen.
                         Positive value delays webcam (trims it), negative advances it.
     """
@@ -92,7 +93,6 @@ def preview_videos_alignment(
     output_fps = max(webcam_fps, screen_fps)  # higher FPS to preserve more detail
     avg_duration = (duration_webcam + duration_screen) / 2  # so that both videos fit
     total_frames_output = int(avg_duration * output_fps)
-    output_path = webcam_path.parent / "alignment_preview.mp4"
     output_height = max(webcam_height, screen_height)
 
     # Calculate output widths based on aspect ratio preservation
@@ -1317,6 +1317,7 @@ def main():
         preview_videos_alignment(
             webcam_path,
             screen_path,
+            output_dir / "alignment_preview.mp4",
             webcam_video_offset_ms,
         )
 
@@ -1329,15 +1330,13 @@ def main():
             webcam_path,
             metadata,
             gaze_pipeline_3d,
-            context_frames=5,
+            context_frames=args.context_frames,
         )
-
         save_evaluation_summary(
             results["evaluation_results"],
-            output_path=output_dir / "evaluation_summary_static.txt",
+            output_path=output_dir / "static_evaluation_summary.txt",
         )
-
-        results_file = output_dir / "evaluation_results_static.json"
+        results_file = output_dir / "static_evaluation_results.json"
         with open(results_file, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nEvaluation results saved to: {results_file}")
@@ -1351,7 +1350,7 @@ def main():
             webcam_path,
             metadata,
             gaze_pipeline_3d,
-            context_frames=5,
+            context_frames=args.context_frames,
             buffer_size=dynamic_calibration_buffer_size,
         )
 
@@ -1362,10 +1361,12 @@ def main():
         )
         save_evaluation_summary(
             results["evaluation_results"],
-            output_path=output_dir / f"evaluation_symmary_dynamic_{buffer_suffix}.txt",
+            output_path=output_dir
+            / f"dynamic_evaluation_summary_BUF_{buffer_suffix}.txt",
         )
-
-        results_file = output_dir / f"evaluation_results_dynamic_{buffer_suffix}.json"
+        results_file = (
+            output_dir / f"dynamic_evaluation_results_BUF_{buffer_suffix}.json"
+        )
         with open(results_file, "w") as f:
             json.dump(results, f, indent=2)
         print(f"\nEvaluation results saved to: {results_file}")
@@ -1379,10 +1380,10 @@ def main():
         generate_gaze_demo(
             webcam_path,
             screen_path,
-            output_dir / f"demo_{visualization_mode}.mp4",
+            output_dir / f"demo_video_{visualization_mode}.mp4",
             metadata,
             gaze_pipeline_3d,
-            context_frames=5,
+            context_frames=args.context_frames,
             buffer_size=dynamic_calibration_buffer_size,
             webcam_video_offset_ms=0,  # works better with 0
             visualization_mode=visualization_mode,
