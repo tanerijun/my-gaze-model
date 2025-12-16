@@ -91,28 +91,38 @@ class Mapper:
         all_feature_vectors = self.initial_feature_vectors.copy()
         all_screen_points = self.initial_screen_points.copy()
 
+        sample_weights = [1.0] * len(all_feature_vectors)
+
         if self.enable_dynamic_calibration:
             all_feature_vectors.extend(self.dynamic_feature_vectors)
             all_screen_points.extend(self.dynamic_screen_points)
+
+            n_dynamic = len(self.dynamic_feature_vectors)
+            dynamic_weights = (
+                np.linspace(0.5, 5.0, n_dynamic).tolist() if n_dynamic > 0 else []
+            )
+
+            sample_weights.extend(dynamic_weights)
 
         if len(all_feature_vectors) == 0:
             raise ValueError("No calibration data available for training")
 
         X = np.array(all_feature_vectors)
         screen_points = np.array(all_screen_points)
+        weights = np.array(sample_weights)
 
         y_x = screen_points[:, 0]  # x coordinates
         y_y = screen_points[:, 1]  # y coordinates
 
         # Train separate models for x and y
-        self.model_x.fit(X, y_x)
-        self.model_y.fit(X, y_y)
+        self.model_x.fit(X, y_x, sample_weight=weights)
+        self.model_y.fit(X, y_y, sample_weight=weights)
 
         self.is_trained = True
 
         # Return R² scores
-        score_x = float(self.model_x.score(X, y_x))
-        score_y = float(self.model_y.score(X, y_y))
+        score_x = float(self.model_x.score(X, y_x, sample_weight=weights))
+        score_y = float(self.model_y.score(X, y_y, sample_weight=weights))
 
         return score_x, score_y
 
