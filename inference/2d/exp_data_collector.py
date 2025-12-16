@@ -564,6 +564,10 @@ def evaluate_gaze_model_dynamic(
     calibration_history = []
     feature_buffer = deque(maxlen=10)
 
+    last_implicit_calib_timestamp = 0
+    last_calib_card_id = None
+    min_implicit_interval_ms = 400
+
     for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
         ret, frame = cap.read()
         if not ret:
@@ -578,6 +582,18 @@ def evaluate_gaze_model_dynamic(
 
         if frame_idx in calibration_trigger_map and current_features is not None:
             calib_click = calibration_trigger_map[frame_idx]
+            current_ts = calib_click["timestamp"]
+            current_card_id = calib_click.get("cardId")
+
+            if calib_click["type"] == "implicit":
+                is_same_card = current_card_id == last_calib_card_id
+                is_too_fast = (
+                    current_ts - last_implicit_calib_timestamp
+                ) < min_implicit_interval_ms
+
+                if is_same_card and is_too_fast:
+                    continue  # Skip spam click on same card
+
             is_valid_explicit = calib_click["type"] == "explicit"
             is_valid_implicit = (
                 calib_click["type"] == "implicit"
