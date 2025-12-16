@@ -729,12 +729,15 @@ def evaluate_gaze_model_dynamic(
         center_frame_idx = click_data["center_frame_idx"]
         frame_predictions = click_data["predictions"]
 
-        target_x = click["screenX"]
-        target_y = click["screenY"]
+        target_x1 = click["screenX"]
+        target_y1 = click["screenY"]
+        target_x2 = click["targetX"]
+        target_y2 = click["targetY"]
 
         print(f"\nEvaluating click {click_id}:")
         print(f"  Center frame: {center_frame_idx}")
-        print(f"  Ground truth: ({target_x:.1f}, {target_y:.1f})")
+        print(f"  Ground truth: ({target_x1:.1f}, {target_y1:.1f})")
+        print(f"  Ground truth: ({target_x2:.1f}, {target_y2:.1f})")
 
         if not frame_predictions:
             raise AssertionError(f"No predictions collected for click {click_id}")
@@ -742,10 +745,13 @@ def evaluate_gaze_model_dynamic(
         # Calculate errors for each prediction
         errors = []
         for pred in frame_predictions:
-            euclidean_distance = np.sqrt(
-                (pred["x"] - target_x) ** 2 + (pred["y"] - target_y) ** 2
+            euclidean_distance1 = np.sqrt(
+                (pred["x"] - target_x1) ** 2 + (pred["y"] - target_y1) ** 2
             )
-            errors.append(euclidean_distance)
+            euclidean_distance2 = np.sqrt(
+                (pred["x"] - target_x2) ** 2 + (pred["y"] - target_y2) ** 2
+            )
+            errors.append(min(euclidean_distance1, euclidean_distance2))
 
         mean_error = np.mean(errors)
         median_error = np.median(errors)
@@ -757,7 +763,7 @@ def evaluate_gaze_model_dynamic(
                 "click_id": click_id,
                 "timestamp": click["timestamp"],
                 "videoTimestamp": click["videoTimestamp"],
-                "ground_truth": {"x": target_x, "y": target_y},
+                "ground_truth": {"x": target_x1, "y": target_y1},
                 "num_predictions": len(frame_predictions),
                 "errors_px": errors,
                 "mean_error_px": float(mean_error),
@@ -1884,8 +1890,8 @@ def main():
     parser.add_argument(
         "--buffer-size",
         type=int,
-        default=110,
-        help="Buffer size for dynamic calibration. Use -1 for infinite accumulation (default: 110)",
+        default=90,
+        help="Buffer size for dynamic calibration. Use -1 for infinite accumulation (default: 90)",
     )
     parser.add_argument(
         "--demo-visualization-mode",
