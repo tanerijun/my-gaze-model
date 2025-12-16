@@ -1723,6 +1723,114 @@ def analyze_linearity(
     print(f"Data saved to: {data_path}")
 
 
+def analyze_spatial_accuracy(metadata: dict, output_dir: Path):
+    """
+    Generates a spatial heatmap of accuracy by loading existing evaluation results.
+    """
+    from collections import defaultdict
+
+    result_files = sorted(output_dir.glob("*evaluation_results*.json"))
+
+    if not result_files:
+        print(f"\n[!] No evaluation results found in {output_dir}")
+        print("    Please run static or dynamic evaluation first.")
+        return
+
+    print(f"\n{'=' * 60}")
+    print("SELECT DATA SOURCE FOR SPATIAL ANALYSIS")
+    print(f"{'=' * 60}")
+    for i, f in enumerate(result_files):
+        print(f"[{i}] {f.name}")
+
+    while True:
+        try:
+            choice = input("\nEnter file number: ")
+            selected_file = result_files[int(choice)]
+            break
+        except (ValueError, IndexError):
+            print("Invalid selection. Try again.")
+
+    print(f"\nLoading: {selected_file.name}")
+    with open(selected_file, "r") as f:
+        data = json.load(f)
+
+    results = data.get("evaluation_results", [])
+    if not results:
+        print("Selected file contains no evaluation results.")
+        return
+
+    # Group by Spatial Location
+    meta_click_map = {c["id"]: c for c in metadata["clicks"]}
+    location_errors = defaultdict(list)
+
+    print(f"Processing {len(results)} data points...")
+
+    for res in results:
+        click_id = res.get("click_id")
+        error_val = res.get("error_px")
+
+        if click_id in meta_click_map:
+            meta = meta_click_map[click_id]
+            key = (int(meta["screenX"]), int(meta["screenY"]))
+            location_errors[key].append(error_val)
+
+    # Draw Visualization
+    w = metadata["screenResolution"]["width"]
+    h = metadata["screenResolution"]["height"]
+
+    canvas = np.ones((h, w, 3), dtype=np.uint8) * 255
+
+    grid_color = (220, 220, 220)
+    for y in range(0, h, 100):
+        cv2.line(canvas, (0, y), (w, y), grid_color, 1, cv2.LINE_AA)
+    for x in range(0, w, 100):
+        cv2.line(canvas, (x, 0), (x, h), grid_color, 1, cv2.LINE_AA)
+
+    print(f"Plotting {len(location_errors)} unique spatial locations...")
+
+    for (x, y), errors in location_errors.items():
+        mean_err = np.mean(errors)
+
+        # Color Mapping: Green (Good) -> Red (Bad)
+        # Note: BGR color space
+        norm_err = min(mean_err, 200) / 200.0
+        r = int(255 * norm_err)
+        g = int(255 * (1 - norm_err))
+        b = 0
+        fill_color = (b, g, r)
+
+        radius = 30 + int(mean_err / 10)
+        cv2.circle(canvas, (x, y), radius, fill_color, -1, lineType=cv2.LINE_AA)
+
+        border_color = (50, 50, 50)
+        cv2.circle(canvas, (x, y), radius, border_color, 2, lineType=cv2.LINE_AA)
+
+        text = f"{mean_err:.0f}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1
+        thickness = 1
+        text_color = (0, 0, 0)
+
+        (tw, th), _ = cv2.getTextSize(text, font, font_scale, thickness)
+        tx = x - tw // 2
+        ty = y + th // 2
+        cv2.putText(
+            canvas,
+            text,
+            (tx, ty),
+            font,
+            font_scale,
+            text_color,
+            thickness,
+            lineType=cv2.LINE_AA,
+        )
+
+    output_filename = f"spatial_accuracy_map_{selected_file.stem}.png"
+    output_path = output_dir / output_filename
+    cv2.imwrite(str(output_path), canvas)
+    print(f"\nSpatial map saved to: {output_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Process collected experiment data for gaze estimation"
@@ -1764,6 +1872,7 @@ def main():
             "demo_video",
             "head_pose_analysis",
             "linearity_analysis",
+            "spatial_accuracy",
         ],
         help="Tasks to perform. Can specify multiple tasks.",
     )
@@ -1951,6 +2060,13 @@ def main():
             gaze_pipeline_3d,
             output_dir,
         )
+
+    if "spatial_accuracy" in args.tasks:
+        print(f"\n{'=' * 60}")
+        print("TASK: Spatial Accuracy Analysis")
+        print(f"{'=' * 60}")
+
+        analyze_spatial_accuracy(metadata, output_dir)
 
     print(f"\n{'=' * 60}")
     print("All tasks completed successfully!")
