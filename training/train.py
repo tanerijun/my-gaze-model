@@ -153,9 +153,11 @@ def plot_loss_curve(train_losses, val_losses, output_dir):
     return plot_path
 
 
-def main(cfg_path):
+def main(cfg_path, backbone_override=None):
     """Main training orchestrator."""
     cfg = load_config(cfg_path)
+    if backbone_override:
+        cfg["backbone"] = backbone_override
 
     # Setup
     timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -273,7 +275,7 @@ def main(cfg_path):
                     f"New best model saved with validation loss: {best_val_loss:.4f}"
                 )
 
-        if ((epoch + 1) % 3 == 0) or ((epoch + 1) % 5 == 0):
+        if (epoch + 1) % 5 == 0:
             torch.save(
                 model.state_dict(), os.path.join(output_dir, f"epoch_{epoch + 1}.pth")
             )
@@ -296,5 +298,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", type=str, required=True, help="Path to the config file for training"
     )
+    parser.add_argument(
+        "--backbone",
+        type=str,
+        help="Override the backbone specified in the config file",
+    )
     args = parser.parse_args()
-    main(args.config)
+    main(args.config, args.backbone)
