@@ -4,7 +4,7 @@ data_root: /home/tanerijun/gaze-tracker-model/training/data/preprocessed/Gaze360
 split: train
 
 # Backbone
-backbone: mobileone_s1
+backbone: efficientnet_b0
 pretrained: true
 
 final_model: true

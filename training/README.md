@@ -39,10 +39,10 @@ Preprocess:
 
 - Important: Before running, you must edit the root and out_root paths at the top of the `preprocessing/gaze360.py` and `preprocessing/mpiifacegaze.py` scripts to match your local machine's paths.
 - Run the script:
-  ```sh
-  uv run python preprocessing/gaze360.py
-  uv run python preprocessing/mpiifacegaze.py
-  ```
+    ```sh
+    uv run python preprocessing/gaze360.py
+    uv run python preprocessing/mpiifacegaze.py
+    ```
 
 ## Step 2: Training and Evaluation
 
@@ -194,3 +194,9 @@ uv run python eval.py --config /path/to/mobileone_training_config.yaml --weights
 - lowformer_b15
 - lowformer_b2
 - lowformer_b3
+
+### Available through timm
+
+```sh
+uv run python -c "import timm; print('\n'.join(timm.list_models()))"
+```
