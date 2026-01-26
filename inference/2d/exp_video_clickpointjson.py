@@ -260,7 +260,7 @@ def main(args):
         weights_path=args.weights,
         device="cuda" if torch.cuda.is_available() else "cpu",
         smooth_facebbox=True,
-        smooth_gaze=True,
+        smooth_gaze=False,
     )
     mapper = Mapper()
     pipeline_2d = GazePipeline2D(
