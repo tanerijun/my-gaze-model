@@ -15,18 +15,19 @@ def build_model(config, **backbone_kwargs):
     """
     backbone_name = config["backbone"]
 
-    if backbone_name.startswith("resnet"):
+    if backbone_name.startswith("resnetaaa"):
+        # if backbone_name.startswith("resnet"):
         backbone = ResNetBackbone(
             arch=backbone_name,
             pretrained=config.get("pretrained", True),
             **backbone_kwargs,
         )
-    elif backbone_name.startswith("mobileone"):
-        backbone = MobileOneBackbone(
-            arch=backbone_name,
-            pretrained=config.get("pretrained", True),
-            **backbone_kwargs,
-        )
+    # elif backbone_name.startswith("mobileone"):
+    #     backbone = MobileOneBackbone(
+    #         arch=backbone_name,
+    #         pretrained=config.get("pretrained", True),
+    #         **backbone_kwargs,
+    #     )
     elif backbone_name.startswith("lowformer"):
         backbone = LowFormerBackbone(
             arch=backbone_name,

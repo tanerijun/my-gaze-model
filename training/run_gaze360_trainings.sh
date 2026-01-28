@@ -6,10 +6,15 @@ set -e
 # Trap for Ctrl+C
 trap "echo 'Script interrupted. Exiting.'; exit" INT
 
+# Done: "resnet18" "resnet34" "resnet50" "efficientnet_b0" "efficientnet_b1" "efficientnet_b2" "efficientnet_b3" "efficientnet_b4" "efficientformer_l1" "efficientformer_l3" "efficientformerv2_s0" "efficientformerv2_s1" "efficientformerv2_s2" "mobilevit_s" "mobilevit_xs" "mobilevit_xxs" "mobilevitv2_050" "mobilevitv2_075" "mobilevitv2_100" "mobilevitv2_125" "mobilevitv2_150" "mobilevitv2_175" "ghostnet_100" "ghostnetv2_100" "ghostnetv3_100" "swiftformer_xs" "swiftformer_s" "mobilenetv2_050" "mobilenetv2_100" "mobilenetv3_small_050" "mobilenetv3_small_075" "mobilenetv3_small_100" "mobilenetv4_conv_small" "mobilenetv4_conv_medium" "mobilenetv4_hybrid_medium" "fasternet_t0" "fasternet_t2" "fasternet_s"
+# Failed: "efficientnet_b5" "efficientnet_b6" "efficientnet_b7" "efficientnet_b8" "efficientformer_l7" "mobilevitv2_200"
+
+# NO WEIGHT: "ghostnet_050" "ghostnetv3_050" "mobilenetv2_035" "ghostnetv2_130" "ghostnetv3_130"
+
 # Array of backbone models to train.
 # You can add or remove backbones from this list.
 # Make sure the backbone names are valid in model registry.
-BACKBONES=("resnet18" "resnet34" "resnet50" "efficientnet_b0" "efficientnet_b1" "efficientnet_b2" "efficientnet_b3" "efficientnet_b4" "efficientnet_b5" "efficientnet_b6" "efficientnet_b7" "efficientnet_b8" "efficientformer_l1" "efficientformer_l3" "efficientformer_l7" "efficientformerv2_s0" "efficientformerv2_s1" "efficientformerv2_s2" "mobilevit_s" "mobilevit_xs" "mobilevit_xxs" "mobilevitv2_050" "mobilevitv2_075" "mobilevitv2_100" "mobilevitv2_125" "mobilevitv2_150" "mobilevitv2_175" "mobilevitv2_200" "mobilenetv4_conv_small" "mobilenetv4_conv_medium" "mobilenetv4_conv_large" "mobilenetv3_small_050" "mobilenetv3_small_075" "mobilenetv3_small_100" "fasternet_s" "fasternet_m" "fasternet_l" "tinynet_a" "tinynet_b" "tinynet_c" "tinynet_d" "tinynet_e")
+BACKBONES=("mobilenetv3_large_100")
 
 # Path to the original configuration file
 BASE_CONFIG="configs/gaze360_train.yaml"
