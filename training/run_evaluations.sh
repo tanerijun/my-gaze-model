@@ -49,7 +49,9 @@ for model_dir in "$@"; do
 
     # --- 2. Create Temporary Eval Config ---
     TEMP_EVAL_CONFIG="configs/temp_eval_${backbone}.yaml"
-    sed "s/backbone: .*/backbone: $backbone/" "$BASE_EVAL_CONFIG" > "$TEMP_EVAL_CONFIG"
+    # Copy base config and add backbone line (the base config uses include, so we need to add it)
+    cp "$BASE_EVAL_CONFIG" "$TEMP_EVAL_CONFIG"
+    echo "backbone: $backbone" >> "$TEMP_EVAL_CONFIG"
     if [ $? -ne 0 ]; then
         echo "Failed to create temporary config for $backbone. Skipping."
         continue
@@ -95,7 +97,7 @@ for model_dir in "$@"; do
         fi
 
         if [[ "$epoch_name" == "best" ]]; then
-            inf_time_s=$(echo "$eval_output" | grep "Total evaluation time:" | awk '{print $5}')
+            inf_time_s=$(echo "$eval_output" | grep "Total evaluation time:" | awk '{print $7}')
             if [ -n "$inf_time_s" ]; then
                 inference_time=$inf_time_s
             fi

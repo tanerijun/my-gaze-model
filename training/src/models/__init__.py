@@ -22,12 +22,12 @@ def build_model(config, **backbone_kwargs):
             pretrained=config.get("pretrained", True),
             **backbone_kwargs,
         )
-    # elif backbone_name.startswith("mobileone"):
-    #     backbone = MobileOneBackbone(
-    #         arch=backbone_name,
-    #         pretrained=config.get("pretrained", True),
-    #         **backbone_kwargs,
-    #     )
+    elif backbone_name.startswith("mobileone"):
+        backbone = MobileOneBackbone(
+            arch=backbone_name,
+            pretrained=config.get("pretrained", True),
+            **backbone_kwargs,
+        )
     elif backbone_name.startswith("lowformer"):
         backbone = LowFormerBackbone(
             arch=backbone_name,
