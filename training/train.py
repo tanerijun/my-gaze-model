@@ -155,6 +155,7 @@ def plot_loss_curve(train_losses, val_losses, output_dir):
 
 def main(cfg_path, backbone_override=None):
     """Main training orchestrator."""
+    set_random_seeds(42)
     cfg = load_config(cfg_path)
     if backbone_override:
         cfg["backbone"] = backbone_override

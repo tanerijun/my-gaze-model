@@ -7,7 +7,8 @@
 set -e
 
 # --- CONFIGURATION ---
-DATA_ROOT="/home/tanerijun/gaze-tracker-model/data/preprocessed/MPIIFaceGaze"
+# IMPORTANT: DATA_ROOT must match the data_root in mpiifacegaze_train.yaml
+DATA_ROOT="/home/tanerijun/gaze-tracker-model/training/data/preprocessed/MPIIFaceGaze"
 BASE_CONFIG="configs/mpiifacegaze_train.yaml"
 EVAL_TEMPLATE="configs/mpiifacegaze_eval.yaml"
 TIMESTAMP=$(date +'%Y%m%d-%H%M%S')

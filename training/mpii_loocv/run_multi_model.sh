@@ -15,7 +15,8 @@ set -e
 trap "echo 'Script interrupted. Exiting.'; exit" INT
 
 # --- CONFIGURATION ---
-DATA_ROOT="/home/tanerijun/gaze-tracker-model/data/preprocessed/MPIIFaceGaze"
+# IMPORTANT: DATA_ROOT must match the data_root in mpiifacegaze_train.yaml
+DATA_ROOT="/home/tanerijun/gaze-tracker-model/training/data/preprocessed/MPIIFaceGaze"
 BASE_CONFIG="configs/mpiifacegaze_train.yaml"
 EVAL_TEMPLATE="configs/mpiifacegaze_eval.yaml"
 
@@ -125,12 +126,8 @@ for backbone in "${BACKBONES[@]}"; do
         TEMP_EVAL_CONFIG="configs/temp_eval_config_for_${PERSON_ID}.yaml"
         sed "s/__PERSON_ID__/$PERSON_ID/" "$EVAL_TEMPLATE" > "$TEMP_EVAL_CONFIG"
 
-        # Also update backbone in eval config
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            sed -i '' "s/^backbone:.*/backbone: \"$backbone\"/" "$TEMP_EVAL_CONFIG"
-        else
-            sed -i "s/^backbone:.*/backbone: \"$backbone\"/" "$TEMP_EVAL_CONFIG"
-        fi
+        # Append backbone override to eval config (since eval uses include, we need to add it)
+        echo "backbone: \"$backbone\"" >> "$TEMP_EVAL_CONFIG"
 
         echo "Step 3: Evaluating on $PERSON_ID..."
         EVAL_OUTPUT=$(uv run eval.py --config "$TEMP_EVAL_CONFIG" --weights "$WEIGHTS_PATH" 2>&1)
