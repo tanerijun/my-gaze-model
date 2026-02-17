@@ -810,6 +810,7 @@ def generate_gaze_demo(
     heatmap_decay: float = 0.95,
     scanpath_length: int = 30,
     scanpath_thickness: int = 3,
+    draw_during_calibration: bool = False,
 ):
     """
     Generate a demo video with gaze visualization overlaid on screen recording.
@@ -837,12 +838,14 @@ def generate_gaze_demo(
         heatmap_decay: Decay factor for heatmap accumulator
         scanpath_length: Number of points in scanpath history
         scanpath_thickness: Line thickness for scanpath
+        draw_during_calibration: If True, also render gaze during calibration phase
     """
     print(f"\n{'=' * 60}")
     print("GENERATING GAZE DEMO VIDEO (TIMESTAMP-BASED SYNC)")
     print(f"{'=' * 60}")
     print(f"Visualization mode: {visualization_mode}")
     print(f"Webcam offset: {webcam_video_offset_ms}ms")
+    print(f"Draw during calibration: {draw_during_calibration}")
 
     # Get game start timestamp to determine when to start rendering predictions
     game_start_timestamp = metadata.get("gameStartTimestamp")
@@ -1049,8 +1052,11 @@ def generate_gaze_demo(
         # Create output frame
         output_frame = screen_frame.copy()
 
-        # Only render gaze visualization if we have a prediction AND after game start
-        if gaze_point and webcam_frame_idx >= render_start_frame:
+        # Render during calibration only when explicitly enabled
+        should_render = (
+            draw_during_calibration or webcam_frame_idx >= render_start_frame
+        )
+        if gaze_point and should_render:
             gaze_x, gaze_y = gaze_point
 
             if visualization_mode == "point":
@@ -2131,6 +2137,11 @@ def main():
         choices=["point", "heatmap", "scanpath"],
         help="Visualization mode for demo video (default: point)",
     )
+    parser.add_argument(
+        "--draw-during-calibration",
+        action="store_true",
+        help="Also render predicted gaze during calibration stage in demo video",
+    )
 
     args = parser.parse_args()
 
@@ -2261,6 +2272,7 @@ def main():
             buffer_size=dynamic_calibration_buffer_size,
             webcam_video_offset_ms=0,  # works better with 0
             visualization_mode=visualization_mode,
+            draw_during_calibration=args.draw_during_calibration,
         )
 
     if "head_pose_analysis" in args.tasks:
