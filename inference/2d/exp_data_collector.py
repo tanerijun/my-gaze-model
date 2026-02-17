@@ -1420,6 +1420,31 @@ def analyze_head_pose(
 
     def _save_statistics(session_data: list[dict]):
         """Save statistics and full data."""
+
+        def _summary(values: list[float]) -> dict[str, float | None]:
+            if not values:
+                return {
+                    "mean": None,
+                    "median": None,
+                    "std_population": None,
+                    "std_sample": None,
+                    "min": None,
+                    "max": None,
+                    "p95": None,
+                }
+
+            arr = np.asarray(values, dtype=float)
+            std_sample = float(np.std(arr, ddof=1)) if len(arr) > 1 else None
+            return {
+                "mean": float(np.mean(arr)),
+                "median": float(np.median(arr)),
+                "std_population": float(np.std(arr, ddof=0)),
+                "std_sample": std_sample,
+                "min": float(np.min(arr)),
+                "max": float(np.max(arr)),
+                "p95": float(np.percentile(arr, 95)),
+            }
+
         valid_data = [d for d in session_data if d["total_deviation"] is not None]
         game_data = [d for d in valid_data if d["is_game_phase"]]
 
@@ -1435,25 +1460,157 @@ def analyze_head_pose(
             "calibration_pose": calibration_pose,
             "total_frames": len(session_data),
             "valid_detections": len(valid_data),
-            "detection_rate": len(valid_data) / len(session_data),
+            "detection_rate": len(valid_data) / len(session_data)
+            if session_data
+            else 0,
         }
 
         if game_data:
-            game_deviations = [d["total_deviation"] for d in game_data]
+            game_pairs = [
+                (d["timestamp_ms"], d["total_deviation"])
+                for d in game_data
+                if d["timestamp_ms"] is not None and d["total_deviation"] is not None
+            ]
+            game_timestamps_min = [ts / 60000.0 for ts, _ in game_pairs]
+            game_deviations = [dev for _, dev in game_pairs]
+
+            pitch_abs_deviations = [
+                abs(d["pitch_deviation"])
+                for d in game_data
+                if d["pitch_deviation"] is not None
+            ]
+            yaw_abs_deviations = [
+                abs(d["yaw_deviation"])
+                for d in game_data
+                if d["yaw_deviation"] is not None
+            ]
+            roll_abs_deviations = [
+                abs(d["roll_deviation"])
+                for d in game_data
+                if d["roll_deviation"] is not None
+            ]
+
+            game_pose_rows = [
+                d
+                for d in game_data
+                if d["timestamp_ms"] is not None
+                and d["pitch"] is not None
+                and d["yaw"] is not None
+                and d["roll"] is not None
+            ]
+            game_pose_rows.sort(key=lambda row: row["timestamp_ms"])
+
+            stability_stats: dict[str, float | None] = {
+                "pitch_mean_abs_delta_deg_per_frame": None,
+                "yaw_mean_abs_delta_deg_per_frame": None,
+                "roll_mean_abs_delta_deg_per_frame": None,
+                "pitch_mean_abs_velocity_deg_per_sec": None,
+                "yaw_mean_abs_velocity_deg_per_sec": None,
+                "roll_mean_abs_velocity_deg_per_sec": None,
+                "total_deviation_mean_abs_delta_deg_per_frame": None,
+                "total_deviation_mean_abs_velocity_deg_per_sec": None,
+                "num_transitions": 0,
+                "num_valid_velocity_samples": 0,
+            }
+
+            if len(game_pose_rows) >= 2:
+                ts = np.asarray(
+                    [row["timestamp_ms"] for row in game_pose_rows], dtype=float
+                )
+                pitch_vals = np.asarray(
+                    [row["pitch"] for row in game_pose_rows], dtype=float
+                )
+                yaw_vals = np.asarray(
+                    [row["yaw"] for row in game_pose_rows], dtype=float
+                )
+                roll_vals = np.asarray(
+                    [row["roll"] for row in game_pose_rows], dtype=float
+                )
+                total_vals = np.asarray(
+                    [row["total_deviation"] for row in game_pose_rows], dtype=float
+                )
+
+                dt_sec = np.diff(ts) / 1000.0
+                valid_dt = dt_sec > 0
+
+                pitch_delta = np.abs(np.diff(pitch_vals))
+                yaw_delta = np.abs(np.diff(yaw_vals))
+                roll_delta = np.abs(np.diff(roll_vals))
+                total_delta = np.abs(np.diff(total_vals))
+
+                stability_stats["pitch_mean_abs_delta_deg_per_frame"] = float(
+                    np.mean(pitch_delta)
+                )
+                stability_stats["yaw_mean_abs_delta_deg_per_frame"] = float(
+                    np.mean(yaw_delta)
+                )
+                stability_stats["roll_mean_abs_delta_deg_per_frame"] = float(
+                    np.mean(roll_delta)
+                )
+                stability_stats["total_deviation_mean_abs_delta_deg_per_frame"] = float(
+                    np.mean(total_delta)
+                )
+                stability_stats["num_transitions"] = int(len(pitch_delta))
+
+                if np.any(valid_dt):
+                    stability_stats["pitch_mean_abs_velocity_deg_per_sec"] = float(
+                        np.mean(pitch_delta[valid_dt] / dt_sec[valid_dt])
+                    )
+                    stability_stats["yaw_mean_abs_velocity_deg_per_sec"] = float(
+                        np.mean(yaw_delta[valid_dt] / dt_sec[valid_dt])
+                    )
+                    stability_stats["roll_mean_abs_velocity_deg_per_sec"] = float(
+                        np.mean(roll_delta[valid_dt] / dt_sec[valid_dt])
+                    )
+                    stability_stats["total_deviation_mean_abs_velocity_deg_per_sec"] = (
+                        float(np.mean(total_delta[valid_dt] / dt_sec[valid_dt]))
+                    )
+                    stability_stats["num_valid_velocity_samples"] = int(
+                        np.sum(valid_dt)
+                    )
+
+            drift_rate = None
+            if len(game_timestamps_min) >= 2 and np.ptp(game_timestamps_min) > 0:
+                drift_rate = float(
+                    np.polyfit(game_timestamps_min, game_deviations, 1)[0]
+                )
+
             print("\nGame Phase Head Movement:")
             print(f"  Mean deviation: {np.mean(game_deviations):.2f}°")
             print(f"  Median deviation: {np.median(game_deviations):.2f}°")
             print(f"  Std deviation: {np.std(game_deviations):.2f}°")
             print(f"  Max deviation: {np.max(game_deviations):.2f}°")
             print(f"  95th percentile: {np.percentile(game_deviations, 95):.2f}°")
+            if drift_rate is not None:
+                print(f"  Drift Rate: {drift_rate:.4f}°/min")
+            else:
+                print("  Drift Rate: N/A (insufficient data)")
+            if (
+                stability_stats["total_deviation_mean_abs_velocity_deg_per_sec"]
+                is not None
+            ):
+                print(
+                    "  Stability (|Δtotal|/s): "
+                    f"{stability_stats['total_deviation_mean_abs_velocity_deg_per_sec']:.4f}°/s"
+                )
 
             stats["game_phase"] = {
                 "num_frames": len(game_data),
                 "mean_deviation": float(np.mean(game_deviations)),
                 "median_deviation": float(np.median(game_deviations)),
                 "std_deviation": float(np.std(game_deviations)),
+                "std_deviation_sample": float(np.std(game_deviations, ddof=1))
+                if len(game_deviations) > 1
+                else None,
                 "max_deviation": float(np.max(game_deviations)),
                 "p95_deviation": float(np.percentile(game_deviations, 95)),
+                "drift_rate_deg_min": drift_rate,
+                "per_axis_abs_deviation": {
+                    "pitch": _summary(pitch_abs_deviations),
+                    "yaw": _summary(yaw_abs_deviations),
+                    "roll": _summary(roll_abs_deviations),
+                },
+                "stability": stability_stats,
             }
 
         # Save stats
@@ -1579,16 +1736,14 @@ def analyze_linearity(
     n_impl = len(df[df["source"] == "implicit"])
     n_total = len(df)
 
-    slope_x, intercept_x, r_x, p_x, std_err_x = stats.linregress(
-        df["pitch"], df["target_x"]
-    )
+    linreg_x = np.asarray(stats.linregress(df["pitch"], df["target_x"]), dtype=float)
+    slope_x, intercept_x, r_x, p_x, std_err_x = (float(v) for v in linreg_x[:5])
     pred_x = slope_x * df["pitch"] + intercept_x
     mae_x = mean_absolute_error(df["target_x"], pred_x)
     rmse_x = np.sqrt(mean_squared_error(df["target_x"], pred_x))
 
-    slope_y, intercept_y, r_y, p_y, std_err_y = stats.linregress(
-        df["yaw"], df["target_y"]
-    )
+    linreg_y = np.asarray(stats.linregress(df["yaw"], df["target_y"]), dtype=float)
+    slope_y, intercept_y, r_y, p_y, std_err_y = (float(v) for v in linreg_y[:5])
     pred_y = slope_y * df["yaw"] + intercept_y
     mae_y = mean_absolute_error(df["target_y"], pred_y)
     rmse_y = np.sqrt(mean_squared_error(df["target_y"], pred_y))
@@ -1885,7 +2040,7 @@ def main():
     parser.add_argument(
         "--buffer-size",
         type=int,
-        default=90,
+        default=110,
         help="Buffer size for dynamic calibration. Use -1 for infinite accumulation (default: 90)",
     )
     parser.add_argument(
