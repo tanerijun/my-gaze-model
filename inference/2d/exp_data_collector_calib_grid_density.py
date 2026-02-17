@@ -168,7 +168,77 @@ def load_metadata(metadata_path: Path) -> dict:
     return data
 
 
+def resolve_coordinate_space(metadata: dict) -> dict:
+    """
+    Decide which coordinate space click/calibration points are stored in.
+
+    Returns:
+        {
+            "name": "screen" | "stream",
+            "width": int,
+            "height": int,
+            "max_x": float,
+            "max_y": float,
+        }
+    """
+    screen = metadata.get("screenResolution", {})
+    stream = metadata.get("screenStreamResolution", {})
+
+    screen_w = int(screen.get("width", 0) or 0)
+    screen_h = int(screen.get("height", 0) or 0)
+    stream_w = int(stream.get("width", 0) or 0)
+    stream_h = int(stream.get("height", 0) or 0)
+
+    max_x = 0.0
+    max_y = 0.0
+
+    for point in metadata.get("initialCalibration", {}).get("points", []):
+        x = point.get("screenX")
+        y = point.get("screenY")
+        if x is not None:
+            max_x = max(max_x, float(x))
+        if y is not None:
+            max_y = max(max_y, float(y))
+
+    for click in metadata.get("clicks", []):
+        for x_key, y_key in (("screenX", "screenY"), ("targetX", "targetY")):
+            x = click.get(x_key)
+            y = click.get(y_key)
+            if x is not None:
+                max_x = max(max_x, float(x))
+            if y is not None:
+                max_y = max(max_y, float(y))
+
+    tolerance = 1.05
+    exceeds_screen = screen_w > 0 and (
+        max_x > screen_w * tolerance or max_y > screen_h * tolerance
+    )
+    fits_stream = stream_w > 0 and (
+        max_x <= stream_w * tolerance and max_y <= stream_h * tolerance
+    )
+
+    use_stream = exceeds_screen and fits_stream
+    if use_stream:
+        return {
+            "name": "stream",
+            "width": stream_w,
+            "height": stream_h,
+            "max_x": max_x,
+            "max_y": max_y,
+        }
+
+    return {
+        "name": "screen",
+        "width": screen_w,
+        "height": screen_h,
+        "max_x": max_x,
+        "max_y": max_y,
+    }
+
+
 def print_session_info(metadata: dict):
+    coord_space = resolve_coordinate_space(metadata)
+
     print(f"Session ID: {metadata['sessionId']}")
     print("Participant info:")
     print(f"\tName: {metadata['participant']['name']}")
@@ -185,6 +255,16 @@ def print_session_info(metadata: dict):
     )
     print("Click info:")
     print(f"\tExplicit click count: {metadata['gameMetadata']['totalExplicitClicks']}")
+    if "screenStreamResolution" in metadata:
+        print(
+            f"\tScreen Recording Resolution: W: {metadata['screenStreamResolution']['width']}, "
+            f"H: {metadata['screenStreamResolution']['height']}"
+        )
+    print(
+        "\tCoordinate space used: "
+        f"{coord_space['name']} ({coord_space['width']}x{coord_space['height']}, "
+        f"max observed: {coord_space['max_x']:.1f}x{coord_space['max_y']:.1f})"
+    )
 
 
 def filter_calibration_points(
@@ -313,6 +393,9 @@ def evaluate_with_mapper(
         mapper,
         feature_keys,
     )
+    coord_space = resolve_coordinate_space(metadata)
+    coord_width = coord_space["width"]
+    coord_height = coord_space["height"]
 
     evaluation_results = []
 
@@ -330,8 +413,6 @@ def evaluate_with_mapper(
 
         target_x = click["screenX"]
         target_y = click["screenY"]
-        screen_width = metadata["screenResolution"]["width"]
-        screen_height = metadata["screenResolution"]["height"]
 
         predictions = []
         errors = []
@@ -352,8 +433,8 @@ def evaluate_with_mapper(
 
             pog = results_2d[0]["pog"]
 
-            pog_x = max(0, min(screen_width - 1, pog["x"]))
-            pog_y = max(0, min(screen_height - 1, pog["y"]))
+            pog_x = max(0, min(coord_width - 1, pog["x"]))
+            pog_y = max(0, min(coord_height - 1, pog["y"]))
 
             predictions.append({"frame_idx": frame_idx, "x": pog_x, "y": pog_y})
 

@@ -28,7 +28,77 @@ def load_metadata(metadata_path: Path) -> dict:
     return data
 
 
+def resolve_coordinate_space(metadata: dict) -> dict:
+    """
+    Decide which coordinate space the click/calibration points are stored in.
+
+    Returns:
+        {
+            "name": "screen" | "stream",
+            "width": int,
+            "height": int,
+            "max_x": float,
+            "max_y": float,
+        }
+    """
+    screen = metadata.get("screenResolution", {})
+    stream = metadata.get("screenStreamResolution", {})
+
+    screen_w = int(screen.get("width", 0) or 0)
+    screen_h = int(screen.get("height", 0) or 0)
+    stream_w = int(stream.get("width", 0) or 0)
+    stream_h = int(stream.get("height", 0) or 0)
+
+    max_x = 0.0
+    max_y = 0.0
+
+    for point in metadata.get("initialCalibration", {}).get("points", []):
+        x = point.get("screenX")
+        y = point.get("screenY")
+        if x is not None:
+            max_x = max(max_x, float(x))
+        if y is not None:
+            max_y = max(max_y, float(y))
+
+    for click in metadata.get("clicks", []):
+        for x_key, y_key in (("screenX", "screenY"), ("targetX", "targetY")):
+            x = click.get(x_key)
+            y = click.get(y_key)
+            if x is not None:
+                max_x = max(max_x, float(x))
+            if y is not None:
+                max_y = max(max_y, float(y))
+
+    tolerance = 1.05
+    exceeds_screen = screen_w > 0 and (
+        max_x > screen_w * tolerance or max_y > screen_h * tolerance
+    )
+    fits_stream = stream_w > 0 and (
+        max_x <= stream_w * tolerance and max_y <= stream_h * tolerance
+    )
+
+    use_stream = exceeds_screen and fits_stream
+    if use_stream:
+        return {
+            "name": "stream",
+            "width": stream_w,
+            "height": stream_h,
+            "max_x": max_x,
+            "max_y": max_y,
+        }
+
+    return {
+        "name": "screen",
+        "width": screen_w,
+        "height": screen_h,
+        "max_x": max_x,
+        "max_y": max_y,
+    }
+
+
 def print_session_info(metadata: dict):
+    coord_space = resolve_coordinate_space(metadata)
+
     print(f"Session ID: {metadata['sessionId']}")
     print("Participant info:")
     print(f"\tName: {metadata['participant']['name']}")
@@ -49,6 +119,11 @@ def print_session_info(metadata: dict):
     print("Click info")
     print(f"\tExplicit click count: {metadata['gameMetadata']['totalExplicitClicks']}")
     print(f"\tImplicit click count: {metadata['gameMetadata']['totalImplicitClicks']}")
+    print(
+        "\tCoordinate space used: "
+        f"{coord_space['name']} ({coord_space['width']}x{coord_space['height']}, "
+        f"max observed: {coord_space['max_x']:.1f}x{coord_space['max_y']:.1f})"
+    )
 
 
 def preview_videos_alignment(
@@ -428,6 +503,9 @@ def evaluate_gaze_model_static(
     )
 
     gaze_pipeline_2d = GazePipeline2D(gaze_pipeline_3d, mapper, feature_keys)
+    coord_space = resolve_coordinate_space(metadata)
+    coord_w = coord_space["width"]
+    coord_h = coord_space["height"]
 
     frame_to_clicks = {}
     click_results = {}
@@ -466,10 +544,8 @@ def evaluate_gaze_model_static(
         if frame_idx in frame_to_clicks:
             if results_2d and results_2d[0]["pog"]:
                 pog = results_2d[0]["pog"]
-                screen_w = metadata["screenResolution"]["width"]
-                screen_h = metadata["screenResolution"]["height"]
-                x = max(0, min(pog["x"], screen_w))
-                y = max(0, min(pog["y"], screen_h))
+                x = max(0, min(pog["x"], coord_w))
+                y = max(0, min(pog["y"], coord_h))
                 for click_id in frame_to_clicks[frame_idx]:
                     click_results[click_id]["predictions"].append((x, y))
 
@@ -531,6 +607,9 @@ def evaluate_gaze_model_dynamic(
     mapper.buffer_size = buffer_size
 
     gaze_pipeline_2d = GazePipeline2D(gaze_pipeline_3d, mapper, feature_keys)
+    coord_space = resolve_coordinate_space(metadata)
+    coord_w = coord_space["width"]
+    coord_h = coord_space["height"]
 
     calibration_trigger_map = {}
     for click in all_calibration_clicks:
@@ -643,10 +722,8 @@ def evaluate_gaze_model_dynamic(
             if results_2d and results_2d[0]["pog"]:
                 pog = results_2d[0]["pog"]
 
-                screen_w = metadata["screenResolution"]["width"]
-                screen_h = metadata["screenResolution"]["height"]
-                x = max(0, min(pog["x"], screen_w))
-                y = max(0, min(pog["y"], screen_h))
+                x = max(0, min(pog["x"], coord_w))
+                y = max(0, min(pog["y"], coord_h))
 
                 for click_id in frame_to_eval_clicks[frame_idx]:
                     eval_click_results[click_id]["predictions"].append((x, y))
@@ -855,6 +932,9 @@ def generate_gaze_demo(
         mapper,
         feature_keys,
     )
+    coord_space = resolve_coordinate_space(metadata)
+    coord_w = coord_space["width"]
+    coord_h = coord_space["height"]
 
     # Process webcam frames sequentially
     webcam_cap_phase1 = cv2.VideoCapture(str(webcam_path))
@@ -898,8 +978,8 @@ def generate_gaze_demo(
                 pog = results_2d[0]["pog"]
 
                 # Scale to screen recording resolution
-                scale_x = screen_width / metadata["screenResolution"]["width"]
-                scale_y = screen_height / metadata["screenResolution"]["height"]
+                scale_x = screen_width / coord_w
+                scale_y = screen_height / coord_h
                 gaze_x = int(pog["x"] * scale_x)
                 gaze_y = int(pog["y"] * scale_y)
 
@@ -1930,8 +2010,9 @@ def analyze_spatial_accuracy(metadata: dict, output_dir: Path):
             location_errors[key].append(error_val)
 
     # Draw Visualization
-    w = metadata["screenResolution"]["width"]
-    h = metadata["screenResolution"]["height"]
+    coord_space = resolve_coordinate_space(metadata)
+    w = coord_space["width"]
+    h = coord_space["height"]
 
     canvas = np.ones((h, w, 3), dtype=np.uint8) * 255
 
