@@ -563,7 +563,12 @@ def evaluate_gaze_model_static(
     feature_keys: list[str] = ["pitch", "yaw"],
     context_frames: int = 5,
     time_mapping: Literal["fps", "pos_msec"] = "fps",
-    eval_mode: Literal["sequential", "seek"] = "sequential",
+    eval_mode: Literal["sequential", "seek", "seek_fixation"] = "sequential",
+    fixation_cluster_size: int = 10,
+    fixation_scan_frames: int = 60,
+    fixation_scan_step: int = 3,
+    fixation_low_error_px: float = 140.0,
+    fixation_patience: int = 5,
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
 
@@ -596,6 +601,7 @@ def evaluate_gaze_model_static(
     coord_h = coord_space["height"]
 
     frame_to_clicks = {}
+    base_window_by_click: dict[str, list[int]] = {}
     click_results = {}
 
     for click in explicit_clicks:
@@ -611,6 +617,7 @@ def evaluate_gaze_model_static(
             max(0, click_frame - context_frames * 2),
             min(total_frames, click_frame + context_frames),
         )
+        base_window_by_click[click_id] = list(window_frames)
 
         click_results[click_id] = {
             "meta": click,
@@ -628,6 +635,26 @@ def evaluate_gaze_model_static(
                 frame_to_clicks[f_idx] = []
             frame_to_clicks[f_idx].append(click_id)
 
+    per_frame_prediction: dict[int, tuple[float, float]] = {}
+
+    def _predict_seek_frame(
+        frame_idx: int, frame: np.ndarray
+    ) -> tuple[float, float] | None:
+        gaze_pipeline_3d.reset_tracking()
+        results_3d = gaze_pipeline_3d(frame)
+        if not results_3d:
+            return None
+
+        try:
+            feature_vector = gaze_pipeline_2d.extract_feature_vector(results_3d[0])
+            pred_x, pred_y = mapper.predict(feature_vector)
+        except Exception:
+            return None
+
+        x = max(0, min(pred_x, coord_w))
+        y = max(0, min(pred_y, coord_h))
+        return (x, y)
+
     if eval_mode == "sequential":
         print("Static eval execution: sequential frame pass")
         for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
@@ -642,14 +669,28 @@ def evaluate_gaze_model_static(
                     pog = results_2d[0]["pog"]
                     x = max(0, min(pog["x"], coord_w))
                     y = max(0, min(pog["y"], coord_h))
+                    per_frame_prediction[frame_idx] = (x, y)
                     for click_id in frame_to_clicks[frame_idx]:
                         click_results[click_id]["predictions"].append((x, y))
-    elif eval_mode == "seek":
+    elif eval_mode in ("seek", "seek_fixation"):
         print("Static eval execution: seek-based random access")
-        relevant_frame_indices = sorted(frame_to_clicks.keys())
+
+        relevant_frame_indices = set(frame_to_clicks.keys())
+        if eval_mode == "seek_fixation":
+            scan_half = max(1, int(fixation_scan_frames))
+            for click in explicit_clicks:
+                click_frame = map_timestamp_to_frame_idx(
+                    click["videoTimestamp"],
+                    fps,
+                    total_frames,
+                    frame_timestamps_ms=frame_timestamps_ms,
+                )
+                start_idx = max(0, click_frame - scan_half)
+                end_idx = min(total_frames - 1, click_frame + scan_half)
+                relevant_frame_indices.update(range(start_idx, end_idx + 1))
 
         for frame_idx in tqdm(
-            relevant_frame_indices,
+            sorted(relevant_frame_indices),
             desc="Processing relevant frames (seek)",
             unit="frame",
         ):
@@ -658,21 +699,15 @@ def evaluate_gaze_model_static(
             if not ret:
                 continue
 
-            gaze_pipeline_3d.reset_tracking()
-            results_3d = gaze_pipeline_3d(frame)
-            if not results_3d:
+            pred = _predict_seek_frame(frame_idx, frame)
+            if pred is None:
                 continue
+            per_frame_prediction[frame_idx] = pred
 
-            try:
-                feature_vector = gaze_pipeline_2d.extract_feature_vector(results_3d[0])
-                pred_x, pred_y = mapper.predict(feature_vector)
-            except Exception:
-                continue
-
-            x = max(0, min(pred_x, coord_w))
-            y = max(0, min(pred_y, coord_h))
-            for click_id in frame_to_clicks[frame_idx]:
-                click_results[click_id]["predictions"].append((x, y))
+            if frame_idx in frame_to_clicks:
+                x, y = pred
+                for click_id in frame_to_clicks[frame_idx]:
+                    click_results[click_id]["predictions"].append((x, y))
     else:
         raise ValueError(f"Unknown static eval mode: {eval_mode}")
 
@@ -693,13 +728,99 @@ def evaluate_gaze_model_static(
         err1 = np.sqrt((med_x - tx1) ** 2 + (med_y - ty1) ** 2)
         err2 = np.sqrt((med_x - tx2) ** 2 + (med_y - ty2) ** 2)
 
+        selected_x = float(med_x)
+        selected_y = float(med_y)
+        selected_error = float(min(err1, err2))
+        selected_frames_used = len(preds)
+        selection_reason = "base_window"
+
+        if eval_mode == "seek_fixation":
+            cluster_size = max(3, int(fixation_cluster_size))
+            scan_step = max(1, int(fixation_scan_step))
+            scan_half = max(cluster_size, int(fixation_scan_frames))
+            patience = max(1, int(fixation_patience))
+
+            click_frame = map_timestamp_to_frame_idx(
+                data["meta"]["videoTimestamp"],
+                fps,
+                total_frames,
+                frame_timestamps_ms=frame_timestamps_ms,
+            )
+            start_min = max(0, click_frame - scan_half)
+            start_max = min(total_frames - cluster_size, click_frame + scan_half)
+
+            clusters = []
+            for start_idx in range(start_min, start_max + 1, scan_step):
+                cluster_points = [
+                    per_frame_prediction[f_idx]
+                    for f_idx in range(start_idx, start_idx + cluster_size)
+                    if f_idx in per_frame_prediction
+                ]
+
+                if len(cluster_points) < max(3, cluster_size // 2):
+                    continue
+
+                c_x = float(np.median([p[0] for p in cluster_points]))
+                c_y = float(np.median([p[1] for p in cluster_points]))
+                c_err1 = np.sqrt((c_x - tx1) ** 2 + (c_y - ty1) ** 2)
+                c_err2 = np.sqrt((c_x - tx2) ** 2 + (c_y - ty2) ** 2)
+                c_error = float(min(c_err1, c_err2))
+
+                clusters.append(
+                    {
+                        "x": c_x,
+                        "y": c_y,
+                        "error": c_error,
+                        "frames": len(cluster_points),
+                    }
+                )
+
+            if clusters:
+                global_best = min(clusters, key=lambda c: c["error"])
+
+                low_idx = None
+                for idx, c in enumerate(clusters):
+                    if c["error"] <= fixation_low_error_px:
+                        low_idx = idx
+                        break
+
+                chosen = global_best
+                selection_reason = "global_min"
+
+                if low_idx is not None:
+                    local_best = clusters[low_idx]
+                    no_improve_count = 0
+
+                    for idx in range(low_idx + 1, len(clusters)):
+                        c = clusters[idx]
+                        if c["error"] < local_best["error"]:
+                            local_best = c
+                            no_improve_count = 0
+                        else:
+                            no_improve_count += 1
+                            if no_improve_count >= patience:
+                                break
+
+                    chosen = local_best
+                    selection_reason = "local_min_after_low"
+
+                selected_x = float(chosen["x"])
+                selected_y = float(chosen["y"])
+                selected_error = float(chosen["error"])
+                selected_frames_used = int(chosen["frames"])
+            else:
+                selection_reason = "fallback_base_window"
+
         final_results.append(
             {
                 "click_id": click_id,
                 "timestamp": data["meta"]["timestamp"],
-                "error_px": float(min(err1, err2)),
-                "prediction": {"x": med_x, "y": med_y},
-                "frames_used": len(preds),
+                "error_px": selected_error,
+                "prediction": {"x": selected_x, "y": selected_y},
+                "frames_used": selected_frames_used,
+                "base_window_error_px": float(min(err1, err2)),
+                "eval_mode": eval_mode,
+                "selection_reason": selection_reason,
             }
         )
 
@@ -717,7 +838,12 @@ def evaluate_gaze_model_dynamic(
     context_frames: int = 15,
     buffer_size: Optional[int] = None,
     time_mapping: Literal["fps", "pos_msec"] = "fps",
-    eval_mode: Literal["sequential", "seek"] = "sequential",
+    eval_mode: Literal["sequential", "seek", "seek_fixation"] = "sequential",
+    fixation_cluster_size: int = 10,
+    fixation_scan_frames: int = 60,
+    fixation_scan_step: int = 3,
+    fixation_low_error_px: float = 140.0,
+    fixation_patience: int = 5,
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
     implicit_clicks = [c for c in metadata["clicks"] if c["type"] == "implicit"]
@@ -794,6 +920,7 @@ def evaluate_gaze_model_dynamic(
 
     calibration_history = []
     feature_buffer = deque(maxlen=10)
+    per_frame_prediction: dict[int, tuple[float, float]] = {}
 
     last_implicit_calib_timestamp = 0
     last_calib_card_id = None
@@ -865,7 +992,7 @@ def evaluate_gaze_model_dynamic(
                         )
 
         if frame_idx in frame_to_eval_clicks:
-            if eval_mode == "seek":
+            if eval_mode in ("seek", "seek_fixation"):
                 if current_features is None:
                     return
                 try:
@@ -882,6 +1009,8 @@ def evaluate_gaze_model_dynamic(
                 x = max(0, min(pog["x"], coord_w))
                 y = max(0, min(pog["y"], coord_h))
 
+            per_frame_prediction[frame_idx] = (x, y)
+
             for click_id in frame_to_eval_clicks[frame_idx]:
                 eval_click_results[click_id]["predictions"].append((x, y))
 
@@ -892,7 +1021,7 @@ def evaluate_gaze_model_dynamic(
             if not ret:
                 break
             process_frame(frame_idx, frame)
-    elif eval_mode == "seek":
+    elif eval_mode in ("seek", "seek_fixation"):
         print("Dynamic eval execution: seek-based random access")
 
         relevant_frames = set(frame_to_eval_clicks.keys()) | set(
@@ -903,6 +1032,19 @@ def evaluate_gaze_model_dynamic(
         for trigger_frame in calibration_trigger_map.keys():
             start_idx = max(0, trigger_frame - buffer_context)
             relevant_frames.update(range(start_idx, trigger_frame))
+
+        if eval_mode == "seek_fixation":
+            scan_half = max(1, int(fixation_scan_frames))
+            for click in explicit_clicks:
+                click_frame = map_timestamp_to_frame_idx(
+                    click["videoTimestamp"],
+                    fps,
+                    total_frames,
+                    frame_timestamps_ms=frame_timestamps_ms,
+                )
+                start_idx = max(0, click_frame - scan_half)
+                end_idx = min(total_frames - 1, click_frame + scan_half)
+                relevant_frames.update(range(start_idx, end_idx + 1))
 
         for frame_idx in tqdm(
             sorted(relevant_frames),
@@ -933,13 +1075,99 @@ def evaluate_gaze_model_dynamic(
         err1 = np.sqrt((med_x - tx1) ** 2 + (med_y - ty1) ** 2)
         err2 = np.sqrt((med_x - tx2) ** 2 + (med_y - ty2) ** 2)
 
+        selected_x = float(med_x)
+        selected_y = float(med_y)
+        selected_error = float(min(err1, err2))
+        selected_frames_used = len(preds)
+        selection_reason = "base_window"
+
+        if eval_mode == "seek_fixation":
+            cluster_size = max(3, int(fixation_cluster_size))
+            scan_step = max(1, int(fixation_scan_step))
+            scan_half = max(cluster_size, int(fixation_scan_frames))
+            patience = max(1, int(fixation_patience))
+
+            click_frame = map_timestamp_to_frame_idx(
+                data["meta"]["videoTimestamp"],
+                fps,
+                total_frames,
+                frame_timestamps_ms=frame_timestamps_ms,
+            )
+            start_min = max(0, click_frame - scan_half)
+            start_max = min(total_frames - cluster_size, click_frame + scan_half)
+
+            clusters = []
+            for start_idx in range(start_min, start_max + 1, scan_step):
+                cluster_points = [
+                    per_frame_prediction[f_idx]
+                    for f_idx in range(start_idx, start_idx + cluster_size)
+                    if f_idx in per_frame_prediction
+                ]
+
+                if len(cluster_points) < max(3, cluster_size // 2):
+                    continue
+
+                c_x = float(np.median([p[0] for p in cluster_points]))
+                c_y = float(np.median([p[1] for p in cluster_points]))
+                c_err1 = np.sqrt((c_x - tx1) ** 2 + (c_y - ty1) ** 2)
+                c_err2 = np.sqrt((c_x - tx2) ** 2 + (c_y - ty2) ** 2)
+                c_error = float(min(c_err1, c_err2))
+
+                clusters.append(
+                    {
+                        "x": c_x,
+                        "y": c_y,
+                        "error": c_error,
+                        "frames": len(cluster_points),
+                    }
+                )
+
+            if clusters:
+                global_best = min(clusters, key=lambda c: c["error"])
+
+                low_idx = None
+                for idx, c in enumerate(clusters):
+                    if c["error"] <= fixation_low_error_px:
+                        low_idx = idx
+                        break
+
+                chosen = global_best
+                selection_reason = "global_min"
+
+                if low_idx is not None:
+                    local_best = clusters[low_idx]
+                    no_improve_count = 0
+
+                    for idx in range(low_idx + 1, len(clusters)):
+                        c = clusters[idx]
+                        if c["error"] < local_best["error"]:
+                            local_best = c
+                            no_improve_count = 0
+                        else:
+                            no_improve_count += 1
+                            if no_improve_count >= patience:
+                                break
+
+                    chosen = local_best
+                    selection_reason = "local_min_after_low"
+
+                selected_x = float(chosen["x"])
+                selected_y = float(chosen["y"])
+                selected_error = float(chosen["error"])
+                selected_frames_used = int(chosen["frames"])
+            else:
+                selection_reason = "fallback_base_window"
+
         final_results.append(
             {
                 "click_id": click_id,
                 "timestamp": data["meta"]["timestamp"],
-                "error_px": float(min(err1, err2)),
-                "prediction": {"x": med_x, "y": med_y},
-                "frames_used": len(preds),
+                "error_px": selected_error,
+                "prediction": {"x": selected_x, "y": selected_y},
+                "frames_used": selected_frames_used,
+                "base_window_error_px": float(min(err1, err2)),
+                "eval_mode": eval_mode,
+                "selection_reason": selection_reason,
             }
         )
 
@@ -2346,7 +2574,7 @@ def main():
         "--dynamic-eval-mode",
         type=str,
         default="sequential",
-        choices=["sequential", "seek"],
+        choices=["sequential", "seek", "seek_fixation"],
         help="Execution mode for dynamic evaluation (default: sequential)",
     )
     parser.add_argument(
@@ -2360,7 +2588,7 @@ def main():
         "--static-eval-mode",
         type=str,
         default="sequential",
-        choices=["sequential", "seek"],
+        choices=["sequential", "seek", "seek_fixation"],
         help="Execution mode for static evaluation (default: sequential)",
     )
     parser.add_argument(
