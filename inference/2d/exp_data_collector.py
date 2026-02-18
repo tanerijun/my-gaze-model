@@ -563,6 +563,7 @@ def evaluate_gaze_model_static(
     feature_keys: list[str] = ["pitch", "yaw"],
     context_frames: int = 5,
     time_mapping: Literal["fps", "pos_msec"] = "fps",
+    eval_mode: Literal["sequential", "seek"] = "sequential",
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
 
@@ -607,7 +608,8 @@ def evaluate_gaze_model_static(
         )
 
         window_frames = range(
-            max(0, click_frame - context_frames * 2), click_frame + context_frames
+            max(0, click_frame - context_frames * 2),
+            min(total_frames, click_frame + context_frames),
         )
 
         click_results[click_id] = {
@@ -626,20 +628,53 @@ def evaluate_gaze_model_static(
                 frame_to_clicks[f_idx] = []
             frame_to_clicks[f_idx].append(click_id)
 
-    for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
-        ret, frame = cap.read()
-        if not ret:
-            break
+    if eval_mode == "sequential":
+        print("Static eval execution: sequential frame pass")
+        for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        results_2d = gaze_pipeline_2d.predict(frame)
+            results_2d = gaze_pipeline_2d.predict(frame)
 
-        if frame_idx in frame_to_clicks:
-            if results_2d and results_2d[0]["pog"]:
-                pog = results_2d[0]["pog"]
-                x = max(0, min(pog["x"], coord_w))
-                y = max(0, min(pog["y"], coord_h))
-                for click_id in frame_to_clicks[frame_idx]:
-                    click_results[click_id]["predictions"].append((x, y))
+            if frame_idx in frame_to_clicks:
+                if results_2d and results_2d[0]["pog"]:
+                    pog = results_2d[0]["pog"]
+                    x = max(0, min(pog["x"], coord_w))
+                    y = max(0, min(pog["y"], coord_h))
+                    for click_id in frame_to_clicks[frame_idx]:
+                        click_results[click_id]["predictions"].append((x, y))
+    elif eval_mode == "seek":
+        print("Static eval execution: seek-based random access")
+        relevant_frame_indices = sorted(frame_to_clicks.keys())
+
+        for frame_idx in tqdm(
+            relevant_frame_indices,
+            desc="Processing relevant frames (seek)",
+            unit="frame",
+        ):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            gaze_pipeline_3d.reset_tracking()
+            results_3d = gaze_pipeline_3d(frame)
+            if not results_3d:
+                continue
+
+            try:
+                feature_vector = gaze_pipeline_2d.extract_feature_vector(results_3d[0])
+                pred_x, pred_y = mapper.predict(feature_vector)
+            except Exception:
+                continue
+
+            x = max(0, min(pred_x, coord_w))
+            y = max(0, min(pred_y, coord_h))
+            for click_id in frame_to_clicks[frame_idx]:
+                click_results[click_id]["predictions"].append((x, y))
+    else:
+        raise ValueError(f"Unknown static eval mode: {eval_mode}")
 
     cap.release()
 
@@ -682,6 +717,7 @@ def evaluate_gaze_model_dynamic(
     context_frames: int = 15,
     buffer_size: Optional[int] = None,
     time_mapping: Literal["fps", "pos_msec"] = "fps",
+    eval_mode: Literal["sequential", "seek"] = "sequential",
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
     implicit_clicks = [c for c in metadata["clicks"] if c["type"] == "implicit"]
@@ -763,11 +799,7 @@ def evaluate_gaze_model_dynamic(
     last_calib_card_id = None
     min_implicit_interval_ms = 400
 
-    for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
-        ret, frame = cap.read()
-        if not ret:
-            break
-
+    def process_frame(frame_idx: int, frame: np.ndarray):
         results_3d = gaze_pipeline_3d(frame)
         current_features = None
 
@@ -787,7 +819,7 @@ def evaluate_gaze_model_dynamic(
                 ) < min_implicit_interval_ms
 
                 if is_same_card and is_too_fast:
-                    continue  # Skip spam click on same card
+                    return
 
             is_valid_explicit = calib_click["type"] == "explicit"
             is_valid_implicit = (
@@ -833,16 +865,58 @@ def evaluate_gaze_model_dynamic(
                         )
 
         if frame_idx in frame_to_eval_clicks:
-            results_2d = gaze_pipeline_2d.predict(frame)
-
-            if results_2d and results_2d[0]["pog"]:
+            if eval_mode == "seek":
+                if current_features is None:
+                    return
+                try:
+                    pred_x, pred_y = mapper.predict(current_features)
+                except Exception:
+                    return
+                x = max(0, min(pred_x, coord_w))
+                y = max(0, min(pred_y, coord_h))
+            else:
+                results_2d = gaze_pipeline_2d.predict(frame)
+                if not (results_2d and results_2d[0]["pog"]):
+                    return
                 pog = results_2d[0]["pog"]
-
                 x = max(0, min(pog["x"], coord_w))
                 y = max(0, min(pog["y"], coord_h))
 
-                for click_id in frame_to_eval_clicks[frame_idx]:
-                    eval_click_results[click_id]["predictions"].append((x, y))
+            for click_id in frame_to_eval_clicks[frame_idx]:
+                eval_click_results[click_id]["predictions"].append((x, y))
+
+    if eval_mode == "sequential":
+        print("Dynamic eval execution: sequential frame pass")
+        for frame_idx in tqdm(range(total_frames), desc="Processing frames"):
+            ret, frame = cap.read()
+            if not ret:
+                break
+            process_frame(frame_idx, frame)
+    elif eval_mode == "seek":
+        print("Dynamic eval execution: seek-based random access")
+
+        relevant_frames = set(frame_to_eval_clicks.keys()) | set(
+            calibration_trigger_map.keys()
+        )
+        buffer_maxlen = feature_buffer.maxlen or 10
+        buffer_context = buffer_maxlen - 1
+        for trigger_frame in calibration_trigger_map.keys():
+            start_idx = max(0, trigger_frame - buffer_context)
+            relevant_frames.update(range(start_idx, trigger_frame))
+
+        for frame_idx in tqdm(
+            sorted(relevant_frames),
+            desc="Processing relevant frames (seek)",
+            unit="frame",
+        ):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+            gaze_pipeline_3d.reset_tracking()
+            process_frame(frame_idx, frame)
+    else:
+        raise ValueError(f"Unknown dynamic eval mode: {eval_mode}")
 
     cap.release()
 
@@ -2269,11 +2343,25 @@ def main():
         help="Frame mapping mode for dynamic evaluation clicks/events (default: pos_msec)",
     )
     parser.add_argument(
+        "--dynamic-eval-mode",
+        type=str,
+        default="sequential",
+        choices=["sequential", "seek"],
+        help="Execution mode for dynamic evaluation (default: sequential)",
+    )
+    parser.add_argument(
         "--static-time-mapping",
         type=str,
         default="pos_msec",
         choices=["fps", "pos_msec"],
         help="Frame mapping mode for static evaluation clicks (default: pos_msec)",
+    )
+    parser.add_argument(
+        "--static-eval-mode",
+        type=str,
+        default="sequential",
+        choices=["sequential", "seek"],
+        help="Execution mode for static evaluation (default: sequential)",
     )
     parser.add_argument(
         "--demo-visualization-mode",
@@ -2320,6 +2408,20 @@ def main():
     metadata = load_metadata(metadata_path)
     print_session_info(metadata)
 
+    if args.static_eval_mode != "sequential" and args.static_time_mapping != "fps":
+        print(
+            "Info: static seek mode works best with fps mapping. "
+            "Overriding --static-time-mapping to fps."
+        )
+        args.static_time_mapping = "fps"
+
+    if args.dynamic_eval_mode != "sequential" and args.dynamic_time_mapping != "fps":
+        print(
+            "Info: dynamic seek mode works best with fps mapping. "
+            "Overriding --dynamic-time-mapping to fps."
+        )
+        args.dynamic_time_mapping = "fps"
+
     dynamic_calibration_buffer_size = (
         None if args.buffer_size == -1 else args.buffer_size
     )
@@ -2333,10 +2435,17 @@ def main():
     # )
     #
 
+    non_sequential_eval = (
+        "static_evaluation" in args.tasks and args.static_eval_mode != "sequential"
+    ) or ("dynamic_evaluation" in args.tasks and args.dynamic_eval_mode != "sequential")
+    smooth_facebbox = not non_sequential_eval
+    if not smooth_facebbox:
+        print("Info: non-sequential eval mode detected; disabling face bbox smoothing.")
+
     gaze_pipeline_3d = GazePipeline3D(
         weights_path=str(weights_path),
         device=args.device,
-        smooth_facebbox=True,
+        smooth_facebbox=smooth_facebbox,
         smooth_gaze=False,
     )
 
@@ -2362,6 +2471,7 @@ def main():
             gaze_pipeline_3d,
             context_frames=args.context_frames,
             time_mapping=args.static_time_mapping,
+            eval_mode=args.static_eval_mode,
         )
         save_evaluation_summary(
             results["evaluation_results"],
@@ -2384,6 +2494,7 @@ def main():
             context_frames=args.context_frames,
             buffer_size=dynamic_calibration_buffer_size,
             time_mapping=args.dynamic_time_mapping,
+            eval_mode=args.dynamic_eval_mode,
         )
 
         buffer_suffix = (
