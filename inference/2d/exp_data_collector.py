@@ -251,12 +251,63 @@ def preview_videos_alignment(
     print(f"\nAlignment preview saved to: {output_path}")
 
 
+def index_video_frame_timestamps(
+    video_path: Path, total_frames: int, progress_desc: str
+) -> list[float]:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise IOError(f"Cannot open video for timestamp indexing: {video_path}")
+
+    frame_timestamps_ms: list[float] = []
+    for _ in tqdm(range(total_frames), desc=progress_desc, unit="frame"):
+        grabbed = cap.grab()
+        if not grabbed:
+            break
+        frame_timestamps_ms.append(float(cap.get(cv2.CAP_PROP_POS_MSEC)))
+
+    cap.release()
+    return frame_timestamps_ms
+
+
+def map_timestamp_to_frame_idx(
+    video_timestamp_ms: float,
+    fps: float,
+    total_frames: int,
+    frame_timestamps_ms: list[float] | None = None,
+) -> int:
+    if total_frames <= 0:
+        return 0
+
+    mapped_idx = int(video_timestamp_ms * fps / 1000)
+
+    if frame_timestamps_ms is not None and len(frame_timestamps_ms) >= 2:
+        timestamps = np.asarray(frame_timestamps_ms, dtype=float)
+        idx = int(np.searchsorted(timestamps, video_timestamp_ms))
+
+        if idx <= 0:
+            mapped_idx = 0
+        elif idx >= len(timestamps):
+            mapped_idx = len(timestamps) - 1
+        else:
+            prev_idx = idx - 1
+            if abs(video_timestamp_ms - timestamps[prev_idx]) <= abs(
+                timestamps[idx] - video_timestamp_ms
+            ):
+                mapped_idx = prev_idx
+            else:
+                mapped_idx = idx
+
+    return max(0, min(mapped_idx, total_frames - 1))
+
+
 def train_and_get_initial_mapper(
     webcam_path: Path,
     metadata: dict,
     gaze_pipeline_3d: GazePipeline3D,
     context_frames: int = 0,
     timing_window_ms: float = 0,
+    time_mapping: Literal["fps", "pos_msec"] = "fps",
+    frame_timestamps_ms: list[float] | None = None,
 ):
     """
     Args:
@@ -299,12 +350,34 @@ def train_and_get_initial_mapper(
             # Use timing window method
             window_start_ms = video_timestamp_ms - timing_window_ms
             window_end_ms = video_timestamp_ms + timing_window_ms
-            frame_start = max(0, int(window_start_ms * fps / 1000))
-            frame_end = min(total_frames - 1, int(window_end_ms * fps / 1000))
+            active_timestamps = (
+                frame_timestamps_ms if time_mapping == "pos_msec" else None
+            )
+            frame_start = map_timestamp_to_frame_idx(
+                window_start_ms,
+                fps,
+                total_frames,
+                frame_timestamps_ms=active_timestamps,
+            )
+            frame_end = map_timestamp_to_frame_idx(
+                window_end_ms,
+                fps,
+                total_frames,
+                frame_timestamps_ms=active_timestamps,
+            )
+            if frame_end < frame_start:
+                frame_start, frame_end = frame_end, frame_start
             frame_indices = list(range(frame_start, frame_end + 1))
         else:
             # Use context frames method
-            frame_idx = int(video_timestamp_ms * fps / 1000)
+            frame_idx = map_timestamp_to_frame_idx(
+                video_timestamp_ms,
+                fps,
+                total_frames,
+                frame_timestamps_ms=frame_timestamps_ms
+                if time_mapping == "pos_msec"
+                else None,
+            )
             frame_indices = list(
                 range(frame_idx - context_frames, frame_idx + context_frames + 1)
             )
@@ -489,6 +562,7 @@ def evaluate_gaze_model_static(
     gaze_pipeline_3d: GazePipeline3D,
     feature_keys: list[str] = ["pitch", "yaw"],
     context_frames: int = 5,
+    time_mapping: Literal["fps", "pos_msec"] = "fps",
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
 
@@ -498,8 +572,21 @@ def evaluate_gaze_model_static(
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    frame_timestamps_ms: list[float] | None = None
+    if time_mapping == "pos_msec":
+        frame_timestamps_ms = index_video_frame_timestamps(
+            webcam_path,
+            total_frames,
+            progress_desc="Indexing webcam timestamps (static)",
+        )
+
     mapper = train_and_get_initial_mapper(
-        webcam_path, metadata, gaze_pipeline_3d, context_frames=context_frames
+        webcam_path,
+        metadata,
+        gaze_pipeline_3d,
+        context_frames=context_frames,
+        time_mapping="fps",
+        frame_timestamps_ms=None,
     )
 
     gaze_pipeline_2d = GazePipeline2D(gaze_pipeline_3d, mapper, feature_keys)
@@ -512,7 +599,12 @@ def evaluate_gaze_model_static(
 
     for click in explicit_clicks:
         click_id = click["id"]
-        click_frame = int(click["videoTimestamp"] * fps / 1000)
+        click_frame = map_timestamp_to_frame_idx(
+            click["videoTimestamp"],
+            fps,
+            total_frames,
+            frame_timestamps_ms=frame_timestamps_ms,
+        )
 
         window_frames = range(
             max(0, click_frame - context_frames * 2), click_frame + context_frames
@@ -589,6 +681,7 @@ def evaluate_gaze_model_dynamic(
     feature_keys: list[str] = ["pitch", "yaw"],
     context_frames: int = 15,
     buffer_size: Optional[int] = None,
+    time_mapping: Literal["fps", "pos_msec"] = "fps",
 ):
     explicit_clicks = [c for c in metadata["clicks"] if c["type"] == "explicit"]
     implicit_clicks = [c for c in metadata["clicks"] if c["type"] == "implicit"]
@@ -600,8 +693,21 @@ def evaluate_gaze_model_dynamic(
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    frame_timestamps_ms: list[float] | None = None
+    if time_mapping == "pos_msec":
+        frame_timestamps_ms = index_video_frame_timestamps(
+            webcam_path,
+            total_frames,
+            progress_desc="Indexing webcam timestamps (dynamic)",
+        )
+
     mapper = train_and_get_initial_mapper(
-        webcam_path, metadata, gaze_pipeline_3d, context_frames=context_frames
+        webcam_path,
+        metadata,
+        gaze_pipeline_3d,
+        context_frames=context_frames,
+        time_mapping="fps",
+        frame_timestamps_ms=None,
     )
     mapper.enable_dynamic_calibration = True
     mapper.buffer_size = buffer_size
@@ -613,7 +719,12 @@ def evaluate_gaze_model_dynamic(
 
     calibration_trigger_map = {}
     for click in all_calibration_clicks:
-        frame_idx = int(click["videoTimestamp"] * fps / 1000)
+        frame_idx = map_timestamp_to_frame_idx(
+            click["videoTimestamp"],
+            fps,
+            total_frames,
+            frame_timestamps_ms=frame_timestamps_ms,
+        )
         calibration_trigger_map[frame_idx] = click
 
     frame_to_eval_clicks = {}
@@ -621,7 +732,12 @@ def evaluate_gaze_model_dynamic(
 
     for click in explicit_clicks:
         click_id = click["id"]
-        click_frame = int(click["videoTimestamp"] * fps / 1000)
+        click_frame = map_timestamp_to_frame_idx(
+            click["videoTimestamp"],
+            fps,
+            total_frames,
+            frame_timestamps_ms=frame_timestamps_ms,
+        )
 
         window_frames = range(max(0, click_frame - context_frames), click_frame)
 
@@ -899,15 +1015,23 @@ def generate_gaze_demo(
     )
     print(f"Duration difference: {abs(screen_duration - webcam_duration):.3f}s")
 
+    webcam_frame_timestamps_ms = index_video_frame_timestamps(
+        webcam_path,
+        total_webcam_frames,
+        progress_desc="Indexing webcam timestamps (demo)",
+    )
+
     # Calculate webcam overlay dimensions
     overlay_height = int(screen_height * webcam_scale)
     overlay_width = int(webcam_width * overlay_height / webcam_height)
 
-    # Calculate webcam offset in frames
-    webcam_offset_frames = int((webcam_video_offset_ms / 1000.0) * webcam_fps)
-
     # Calculate the webcam frame index where rendering should start
-    render_start_frame = int((render_start_time_ms / 1000.0) * webcam_fps)
+    render_start_frame = map_timestamp_to_frame_idx(
+        render_start_time_ms,
+        webcam_fps,
+        total_webcam_frames,
+        frame_timestamps_ms=webcam_frame_timestamps_ms,
+    )
     print(f"Predictions will render starting from webcam frame: {render_start_frame}")
 
     # Close initial captures
@@ -947,7 +1071,12 @@ def generate_gaze_demo(
     calibration_click_map = {}
     calibration_clicks = metadata["clicks"]
     for click in calibration_clicks:
-        frame_idx = int(click["videoTimestamp"] * webcam_fps / 1000)
+        frame_idx = map_timestamp_to_frame_idx(
+            click["videoTimestamp"],
+            webcam_fps,
+            total_webcam_frames,
+            frame_timestamps_ms=webcam_frame_timestamps_ms,
+        )
         calibration_click_map[frame_idx] = click
 
     print(f"Processing {total_webcam_frames} webcam frames...")
@@ -1035,10 +1164,12 @@ def generate_gaze_demo(
         screen_timestamp_ms = screen_cap.get(cv2.CAP_PROP_POS_MSEC)
 
         # Convert to webcam frame index with offset
-        webcam_frame_idx = (
-            int((screen_timestamp_ms / 1000.0) * webcam_fps) + webcam_offset_frames
+        webcam_frame_idx = map_timestamp_to_frame_idx(
+            screen_timestamp_ms + webcam_video_offset_ms,
+            webcam_fps,
+            total_webcam_frames,
+            frame_timestamps_ms=webcam_frame_timestamps_ms,
         )
-        webcam_frame_idx = max(0, min(webcam_frame_idx, total_webcam_frames - 1))
 
         # Look up pre-computed gaze prediction
         gaze_point = gaze_predictions.get(webcam_frame_idx)
@@ -2131,6 +2262,20 @@ def main():
         help="Buffer size for dynamic calibration. Use -1 for infinite accumulation (default: 90)",
     )
     parser.add_argument(
+        "--dynamic-time-mapping",
+        type=str,
+        default="pos_msec",
+        choices=["fps", "pos_msec"],
+        help="Frame mapping mode for dynamic evaluation clicks/events (default: pos_msec)",
+    )
+    parser.add_argument(
+        "--static-time-mapping",
+        type=str,
+        default="pos_msec",
+        choices=["fps", "pos_msec"],
+        help="Frame mapping mode for static evaluation clicks (default: pos_msec)",
+    )
+    parser.add_argument(
         "--demo-visualization-mode",
         type=str,
         default="scanpath",
@@ -2216,6 +2361,7 @@ def main():
             metadata,
             gaze_pipeline_3d,
             context_frames=args.context_frames,
+            time_mapping=args.static_time_mapping,
         )
         save_evaluation_summary(
             results["evaluation_results"],
@@ -2237,6 +2383,7 @@ def main():
             gaze_pipeline_3d,
             context_frames=args.context_frames,
             buffer_size=dynamic_calibration_buffer_size,
+            time_mapping=args.dynamic_time_mapping,
         )
 
         buffer_suffix = (
