@@ -188,6 +188,8 @@ def _run_exp_collector(
     context_frames: int,
     buffer_size: int,
     device: str,
+    eval_mode: str,
+    time_mapping: str,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
         sys.executable,
@@ -204,6 +206,14 @@ def _run_exp_collector(
         str(context_frames),
         "--buffer-size",
         str(buffer_size),
+        "--static-eval-mode",
+        eval_mode,
+        "--dynamic-eval-mode",
+        eval_mode,
+        "--static-time-mapping",
+        time_mapping,
+        "--dynamic-time-mapping",
+        time_mapping,
         "--tasks",
         *tasks,
     ]
@@ -305,6 +315,18 @@ def main() -> None:
     )
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--context-frames", type=int, default=5)
+    parser.add_argument(
+        "--eval-mode",
+        choices=["sequential", "seek", "seek_fixation"],
+        default="sequential",
+        help="Shared evaluation execution mode for both static and dynamic tasks.",
+    )
+    parser.add_argument(
+        "--time-mapping",
+        choices=["fps", "pos_msec"],
+        default="pos_msec",
+        help="Shared timestamp-to-frame mapping for both static and dynamic tasks.",
+    )
 
     parser.add_argument(
         "--search-strategy",
@@ -397,6 +419,8 @@ def main() -> None:
 
     print(f"Found {len(sessions)} sessions")
     print(f"Dynamic buffer candidates: {candidates}")
+    print(f"Evaluation mode: {args.eval_mode}")
+    print(f"Time mapping: {args.time_mapping}")
 
     run_correlation = args.comprehensive or args.include_correlation
     run_robustness_compare = args.comprehensive or args.include_robustness_compare
@@ -435,6 +459,8 @@ def main() -> None:
                 context_frames=args.context_frames,
                 buffer_size=90,
                 device=args.device,
+                eval_mode=args.eval_mode,
+                time_mapping=args.time_mapping,
             )
             (session_out / "batch_base_stdout.log").write_text(
                 base_run.stdout or "", encoding="utf-8"
@@ -469,6 +495,8 @@ def main() -> None:
                     context_frames=args.context_frames,
                     buffer_size=buffer_value,
                     device=args.device,
+                    eval_mode=args.eval_mode,
+                    time_mapping=args.time_mapping,
                 )
                 suffix = _buffer_suffix(buffer_value)
                 (session_out / f"batch_dynamic_{suffix}_stdout.log").write_text(
