@@ -6,27 +6,25 @@ EVE Benchmark: 9-Point Personalization & Task-Specific Evaluation
 
 Description:
     Runs 2D Point-of-Gaze mapping benchmarks on cached 3D features extracted
-    from the EVE dataset (validation split: val01 through val05).
+    from the EVE dataset (validation split: val01 through val05, or full 44 subjects).
 
 Experiments:
     1. Global 9-Point Personalization Benchmark:
        - Overall Point-of-Gaze error in pixels, millimeters, % screen diagonal,
          and visual angle degrees across all participants.
     2. Sub-Task Breakdown:
-       - Evaluates accuracy across three stimulus modalities.
-    3. Continuous Dynamic Adaptation on Video Streams:
-       - Tests real-time online adaptation against postural shifts during continuous
-         video viewing using GLAMIA's FIFO queue and outlier filter.
+       - Evaluates accuracy across three stimulus modalities (Video, Image, Wikipedia).
 
 Inputs:
     - Feature cache from extract_features.py:
-      experiments/eve/eve_features.csv
+      experiments/eve/eve_features.csv (Validation)
+      experiments/eve/eve_train_features.csv (Train)
 
 Outputs:
     - Summary CSVs:
       experiments/eve/results/eve_global_benchmark.csv
       experiments/eve/results/eve_task_breakdown.csv
-      experiments/eve/results/eve_dynamic_adaptation.csv
+      experiments/eve/results/benchmark_summary.md
 ===============================================================================
 """
 
@@ -53,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def generate_3x3_grid_targets(
-    width: float = 1920.0, height: float = 1080.0, margin_ratio: float = 0.10
+    width: float = 1920.0, height: float = 1080.0, margin_ratio: float = 0.05
 ) -> np.ndarray:
     """Generates standard 3x3 grid targets across the screen."""
     xs = [margin_ratio * width, 0.50 * width, (1.0 - margin_ratio) * width]
@@ -62,22 +60,61 @@ def generate_3x3_grid_targets(
 
 
 def select_best_grid_samples(
-    df: pd.DataFrame, grid_targets: np.ndarray
+    df: pd.DataFrame, grid_targets: np.ndarray, window_size: int = 11
 ) -> pd.DataFrame:
-    """Finds the 9 frames whose Tobii ground-truth (x, y) are closest to target grid coordinates."""
-    selected_indices = []
-    used_indices = set()
+    """
+    Finds the 9 calibration points matching the standard 3x3 grid targets.
+    Averages features over +/- window_size // 2 frames within the same recording step
+    to filter out single-frame saccadic noise, matching the 11-frame static windowing
+    protocol used in our gamified user study.
+    """
+    half_w = window_size // 2
+    calib_rows = []
+    used_positions = set()
     gt_coords = df[["gt_x", "gt_y"]].to_numpy()
 
     for target in grid_targets:
         dists = np.linalg.norm(gt_coords - target, axis=1)
         sorted_idxs = np.argsort(dists)
-        for idx in sorted_idxs:
+
+        for pos in sorted_idxs:
+            if pos in used_positions:
+                continue
+
+            center_row = df.iloc[pos]
+            step_name = center_row["step_name"]
+            frame_idx = int(center_row["frame_idx"])
+
+            # Extract window in the same step
+            win_df = df[
+                (df["step_name"] == step_name)
+                & (df["frame_idx"] >= frame_idx - half_w)
+                & (df["frame_idx"] <= frame_idx + half_w)
+            ]
+
+            if len(win_df) >= 3:
+                used_positions.add(pos)
+                avg_row = center_row.copy()
+                avg_row["pred_pitch_deg"] = win_df["pred_pitch_deg"].mean()
+                avg_row["pred_yaw_deg"] = win_df["pred_yaw_deg"].mean()
+                avg_row["gt_x"] = win_df["gt_x"].mean()
+                avg_row["gt_y"] = win_df["gt_y"].mean()
+                calib_rows.append(avg_row)
+                break
+
+    if len(calib_rows) == len(grid_targets):
+        return pd.DataFrame(calib_rows)
+
+    # Fallback to single frame if window cannot be extracted
+    selected_indices = []
+    used_indices = set()
+    for target in grid_targets:
+        dists = np.linalg.norm(gt_coords - target, axis=1)
+        for idx in np.argsort(dists):
             if idx not in used_indices:
                 used_indices.add(idx)
                 selected_indices.append(df.index[idx])
                 break
-
     return df.loc[selected_indices]
 
 
@@ -96,7 +133,7 @@ def px_to_visual_degrees(
 
 
 def run_global_personalization_benchmark(
-    df: pd.DataFrame, margin_ratio: float = 0.10
+    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11
 ) -> pd.DataFrame:
     """Trains GLAMIA's 2D linear mapper on 9 points and evaluates on held-out test frames."""
     print("\n" + "=" * 80)
@@ -125,7 +162,7 @@ def run_global_personalization_benchmark(
         grid_9 = generate_3x3_grid_targets(
             screen_w, screen_h, margin_ratio=margin_ratio
         )
-        calib_df = select_best_grid_samples(pdf, grid_9)
+        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size)
         test_df = pdf.drop(index=calib_df.index)
 
         X_calib = calib_df[["pred_pitch_deg", "pred_yaw_deg"]].to_numpy()
@@ -179,7 +216,7 @@ def run_global_personalization_benchmark(
 
 
 def run_task_breakdown_benchmark(
-    df: pd.DataFrame, margin_ratio: float = 0.10
+    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11
 ) -> pd.DataFrame:
     """Evaluates the 9-point personalized mapper across task types (Image, Video, Wikipedia)."""
     print("\n" + "=" * 80)
@@ -208,7 +245,7 @@ def run_task_breakdown_benchmark(
         grid_9 = generate_3x3_grid_targets(
             screen_w, screen_h, margin_ratio=margin_ratio
         )
-        calib_df = select_best_grid_samples(pdf, grid_9)
+        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size)
         test_df = pdf.drop(index=calib_df.index)
 
         X_calib = calib_df[["pred_pitch_deg", "pred_yaw_deg"]].to_numpy()
@@ -298,8 +335,14 @@ def main():
     parser.add_argument(
         "--margin-ratio",
         type=float,
-        default=0.10,
-        help="Grid margin ratio (default 0.10).",
+        default=0.05,
+        help="Grid margin ratio (default 0.05).",
+    )
+    parser.add_argument(
+        "--window-size",
+        type=int,
+        default=11,
+        help="Calibration window size for temporal averaging (default 11).",
     )
     args = parser.parse_args()
 
@@ -337,15 +380,14 @@ def main():
         if not val_path.exists() or not train_path.exists():
             print(f"Error: Missing {val_path} or {train_path}.", file=sys.stderr)
             sys.exit(1)
-        features_path = eve_exp_dir / "eve_all_44_features.csv"
         df_val = pd.read_csv(val_path)
         df_train = pd.read_csv(train_path)
+        features_path = f"{train_path} + {val_path}"
         df = pd.concat([df_train, df_val], ignore_index=True)
     else:
         features_path = eve_exp_dir / "eve_features.csv"
         output_dir = eve_exp_dir
         df = pd.read_csv(features_path)
-
     if args.output_dir is not None:
         output_dir = Path(args.output_dir).resolve()
 
@@ -353,16 +395,21 @@ def main():
     results_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 80)
-    print("EVE Benchmark Evaluation")
+    print("EVE Benchmark Evaluation (Reproducible 11-Frame Window Averaging)")
     print(f"Split:                {args.split}")
     print(f"Features:             {features_path}")
     print(f"Output Results Dir:   {results_dir}")
+    print(f"Margin Ratio:         {args.margin_ratio}")
+    print(f"Calibration Window:   {args.window_size} frames")
     print(
         f"Loaded {len(df):,d} records across {df['participant_id'].nunique()} participants.\n"
     )
     print("=" * 80)
+
     # --- Experiment 1: Global Benchmark ---
-    exp1_df = run_global_personalization_benchmark(df, margin_ratio=args.margin_ratio)
+    exp1_df = run_global_personalization_benchmark(
+        df, margin_ratio=args.margin_ratio, window_size=args.window_size
+    )
     exp1_csv = results_dir / "eve_global_benchmark.csv"
     exp1_df.to_csv(exp1_csv, index=False)
 
@@ -382,7 +429,9 @@ def main():
     print("-" * 90)
 
     # --- Experiment 2: Task Breakdown ---
-    exp2_df = run_task_breakdown_benchmark(df, margin_ratio=args.margin_ratio)
+    exp2_df = run_task_breakdown_benchmark(
+        df, margin_ratio=args.margin_ratio, window_size=args.window_size
+    )
     exp2_csv = results_dir / "eve_task_breakdown.csv"
     exp2_df.to_csv(exp2_csv, index=False)
 
@@ -400,7 +449,7 @@ def main():
     # --- Export Summary ---
     summary_md_path = results_dir / "benchmark_summary.md"
     summary_lines = [
-        "# EVE Benchmark Summary\n",
+        "# EVE Benchmark Summary (Reproducible 11-Frame Window Averaging)\n",
         "## Experiment 1: Global 9-Point Personalization (Webcam-C, 1080p)\n",
         "| Subject | Test Frames | Mean Error (px) | Mean Error (mm) | Mean Error (% Diag) | Visual Angle ($^\\circ$) | P95 (% Diag) |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |",
