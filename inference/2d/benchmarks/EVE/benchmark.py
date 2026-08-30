@@ -60,7 +60,8 @@ def generate_3x3_grid_targets(
 
 
 def select_best_grid_samples(
-    df: pd.DataFrame, grid_targets: np.ndarray, window_size: int = 11
+    df: pd.DataFrame, grid_targets: np.ndarray, window_size: int = 11,
+    min_window_frames: int = 3
 ) -> pd.DataFrame:
     """
     Finds the 9 calibration points matching the standard 3x3 grid targets.
@@ -92,7 +93,7 @@ def select_best_grid_samples(
                 & (df["frame_idx"] <= frame_idx + half_w)
             ]
 
-            if len(win_df) >= 3:
+            if len(win_df) >= min_window_frames:
                 used_positions.add(pos)
                 avg_row = center_row.copy()
                 avg_row["pred_pitch_deg"] = win_df["pred_pitch_deg"].mean()
@@ -133,7 +134,8 @@ def px_to_visual_degrees(
 
 
 def run_global_personalization_benchmark(
-    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11
+    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11,
+    min_window_frames: int = 3
 ) -> pd.DataFrame:
     """Trains GLAMIA's 2D linear mapper on 9 points and evaluates on held-out test frames."""
     print("\n" + "=" * 80)
@@ -162,7 +164,7 @@ def run_global_personalization_benchmark(
         grid_9 = generate_3x3_grid_targets(
             screen_w, screen_h, margin_ratio=margin_ratio
         )
-        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size)
+        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size, min_window_frames=min_window_frames)
         test_df = pdf.drop(index=calib_df.index)
 
         X_calib = calib_df[["pred_pitch_deg", "pred_yaw_deg"]].to_numpy()
@@ -216,7 +218,8 @@ def run_global_personalization_benchmark(
 
 
 def run_task_breakdown_benchmark(
-    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11
+    df: pd.DataFrame, margin_ratio: float = 0.05, window_size: int = 11,
+    min_window_frames: int = 3
 ) -> pd.DataFrame:
     """Evaluates the 9-point personalized mapper across task types (Image, Video, Wikipedia)."""
     print("\n" + "=" * 80)
@@ -245,7 +248,7 @@ def run_task_breakdown_benchmark(
         grid_9 = generate_3x3_grid_targets(
             screen_w, screen_h, margin_ratio=margin_ratio
         )
-        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size)
+        calib_df = select_best_grid_samples(pdf, grid_9, window_size=window_size, min_window_frames=min_window_frames)
         test_df = pdf.drop(index=calib_df.index)
 
         X_calib = calib_df[["pred_pitch_deg", "pred_yaw_deg"]].to_numpy()
@@ -333,6 +336,13 @@ def main():
         help="Custom output directory (overrides default for split).",
     )
     parser.add_argument(
+        "--min-window-frames",
+        type=int,
+        default=3,
+        help="Minimum frames a calibration window must contain to be accepted "
+        "(set to 1 with --window-size 1 for the single-frame protocol).",
+    )
+    parser.add_argument(
         "--margin-ratio",
         type=float,
         default=0.05,
@@ -408,7 +418,8 @@ def main():
 
     # --- Experiment 1: Global Benchmark ---
     exp1_df = run_global_personalization_benchmark(
-        df, margin_ratio=args.margin_ratio, window_size=args.window_size
+        df, margin_ratio=args.margin_ratio, window_size=args.window_size,
+        min_window_frames=args.min_window_frames
     )
     exp1_csv = results_dir / "eve_global_benchmark.csv"
     exp1_df.to_csv(exp1_csv, index=False)
@@ -430,7 +441,8 @@ def main():
 
     # --- Experiment 2: Task Breakdown ---
     exp2_df = run_task_breakdown_benchmark(
-        df, margin_ratio=args.margin_ratio, window_size=args.window_size
+        df, margin_ratio=args.margin_ratio, window_size=args.window_size,
+        min_window_frames=args.min_window_frames
     )
     exp2_csv = results_dir / "eve_task_breakdown.csv"
     exp2_df.to_csv(exp2_csv, index=False)
