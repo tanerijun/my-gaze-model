@@ -23,7 +23,7 @@ On a 25-inch monitor viewed at 65 cm, the display subtends an angular cone of ap
 ## 2. Calibration Methodology (Few-Shot Personalization)
 
 Because EVE does not include a dedicated interactive 9-point calibration routine or video at the start of recordings:
-1. **Grid Anchor Selection**: We define a canonical $3 \times 3$ grid across the $1920 \times 1080$ display (at $10\%$, $50\%$, and $90\%$ of screen width and height).
+1. **Grid Anchor Selection**: We define the standard $3 \times 3$ calibration grid across the $1920 \times 1080$ display, matching the calibration procedure described in the paper.
 2. **Opportunistic Sampling**: For each participant, we identify the **9 frames whose Tobii ground-truth gaze coordinates $(x_{\text{gt}}, y_{\text{gt}})$ are closest to these target grid positions**.
 3. **Model Fitting**: GLAMIA's 2D linear mapper (Ordinary Least Squares) is trained once per participant on these 9 samples:
    $$\hat{x} = w_{x,\text{pitch}} \cdot \theta_{\text{pitch}} + w_{x,\text{yaw}} \cdot \theta_{\text{yaw}} + b_x$$
